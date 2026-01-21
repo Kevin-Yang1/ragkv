@@ -1,5 +1,6 @@
 # A^3: Attention-Aware Accurate KV Cache Fusion for Fast \\ Large Language Model Serving
-
+## Paper
+https://arxiv.org/abs/2511.17560
 
 ## Table of Contents
 
@@ -46,10 +47,3 @@ python ./visualize.py
 # for ruler
 bash ./scripts/eval_ruler.sh
 python .scripts/copy_results_ruler.py
-
-## Paper
-https://arxiv.org/abs/2511.17560
-
-
-## Paper
-https://arxiv.org/abs/2511.17560
