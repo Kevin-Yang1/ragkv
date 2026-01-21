@@ -1,0 +1,13 @@
+{
+    "cwe": "Below is a numbered list of words. In these words, some appear more often than others. Memorize the ones that appear most often.",
+    "fwe": "Read the following coded text and track the frequency of each coded word. Find the three most frequently appeared coded words.",
+    "niah_multikey_1": "A special magic number is hidden within the following text. Make sure to memorize it. I will quiz you about the number afterwards.",
+    "niah_multikey_2": "A special magic number is hidden within the following text. Make sure to memorize it. I will quiz you about the number afterwards.",
+    "niah_multikey_3": "A special magic uuid is hidden within the following text. Make sure to memorize it. I will quiz you about the uuid afterwards.",
+    "niah_multiquery": "Some special magic numbers are hidden within the following text. Make sure to memorize it. I will quiz you about the numbers afterwards.",
+    "niah_multivalue": "Some special magic numbers are hidden within the following text. Make sure to memorize it. I will quiz you about the numbers afterwards.",
+    "niah_single_1": "A special magic number is hidden within the following text. Make sure to memorize it. I will quiz you about the number afterwards.",
+    "niah_single_2": "A special magic number is hidden within the following text. Make sure to memorize it. I will quiz you about the number afterwards.",
+    "niah_single_3": "A special magic uuid is hidden within the following text. Make sure to memorize it. I will quiz you about the uuid afterwards.",
+    "vt": " Memorize and track the chain(s) of variable assignment hidden in the following text."
+}

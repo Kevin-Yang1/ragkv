@@ -1,0 +1,7 @@
+{
+    "kernel_size": 5,
+    "max_capacity": 1024,
+    "pooling": "avgpool",
+    "block": 8
+}
+
