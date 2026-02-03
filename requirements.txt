@@ -36,7 +36,7 @@ fastapi==0.115.12
 fastapi-cli==0.0.7
 fastrlock==0.8.3
 filelock==3.17.0
-flashinfer-python==0.2.7.post1
+flashinfer-python==0.6.2
 fonttools==4.57.0
 frozenlist==1.6.2
 fsspec==2025.2.0
@@ -155,12 +155,12 @@ starlette==0.46.2
 sympy==1.14.0
 tiktoken==0.6.0
 tokenizers==0.20.3
-torch==2.7.1
-torchaudio==2.7.1
-torchvision==0.22.1
+torch==2.9.1
+torchaudio==2.9.1
+torchvision==0.24.1
 tqdm==4.67.1
 transformers==4.46.3
-triton==3.3.1
+triton==3.5.1
 typer==0.16.0
 typing-inspection==0.4.1
 typing_extensions==4.12.2
