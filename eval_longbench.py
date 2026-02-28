@@ -183,6 +183,34 @@ if __name__ == '__main__':
 
             if args.reuse != 'no':
                 extra_config['reuse_config']['cat_kv'] = load_kv(args, model, tokenizer, doc_ids, params, i)
+                if args.reuse == 'surprisal_chunk':
+                    surprisal_info = load_surprisal(args, i)
+                    if 'scores' not in surprisal_info or 'chunk_ranges' not in surprisal_info:
+                        raise ValueError(f'invalid surprisal file format for item_{i}')
+
+                    seq_len = int(surprisal_info.get('seq_len', -1))
+                    if seq_len != len(prompt_ids):
+                        raise ValueError(
+                            f'surprisal seq_len mismatch for item_{i}: {seq_len} vs {len(prompt_ids)}'
+                        )
+
+                    scores = surprisal_info['scores']
+                    if scores.numel() != len(prompt_ids):
+                        raise ValueError(
+                            f'surprisal score length mismatch for item_{i}: {scores.numel()} vs {len(prompt_ids)}'
+                        )
+                    if not torch.isfinite(scores).all():
+                        raise ValueError(f'non-finite surprisal scores in item_{i}')
+
+                    expected_ranges = build_doc_chunk_ranges(doc_ids, params)
+                    loaded_ranges = [tuple(r) for r in surprisal_info['chunk_ranges']]
+                    if loaded_ranges != expected_ranges:
+                        raise ValueError(
+                            f'chunk_ranges mismatch for item_{i}: loaded={loaded_ranges}, expected={expected_ranges}'
+                        )
+
+                    extra_config['reuse_config']['surprisal_scores'] = scores
+                    extra_config['reuse_config']['chunk_ranges'] = expected_ranges
 
             continuation, ttft, tpot = decode(args, model, tokenizer, input, stop_list, max_new_tokens, extra_config)
 

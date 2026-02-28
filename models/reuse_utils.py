@@ -24,6 +24,26 @@ def get_layer(reuse_method):
     else:
         return 0
 
+def allocate_by_largest_remainder(lengths, total_k):
+    if total_k <= 0:
+        return [0] * len(lengths)
+    denom = sum(lengths)
+    if denom <= 0:
+        return [0] * len(lengths)
+
+    raw = [total_k * l / denom for l in lengths]
+    alloc = [int(math.floor(v)) for v in raw]
+    remain = total_k - sum(alloc)
+    if remain > 0:
+        order = sorted(
+            range(len(lengths)),
+            key=lambda idx: (raw[idx] - alloc[idx], lengths[idx], -idx),
+            reverse=True,
+        )
+        for idx in order[:remain]:
+            alloc[idx] += 1
+    return alloc
+
 def get_topindices(reuse_config, other_config, query_states, key_states, value_states, value_old, kvgroups):
     if 'blend' in reuse_config['reuse']: 
         last_len = other_config['data_params']['last_len']
@@ -71,6 +91,53 @@ def get_topindices(reuse_config, other_config, query_states, key_states, value_s
         last_indices = torch.arange(total_len - last_len, total_len, device=top_indices.device)
 
         top_indices = torch.cat([top_indices, last_indices])
+
+    elif 'surprisal_chunk' in reuse_config['reuse']:
+        last_len = other_config['data_params']['last_len']
+        total_len = value_states.shape[2]
+        doc_end = total_len - last_len
+
+        surprisal_scores = reuse_config.get('surprisal_scores', None)
+        chunk_ranges = reuse_config.get('chunk_ranges', None)
+        if surprisal_scores is None or chunk_ranges is None:
+            raise ValueError('surprisal_chunk requires surprisal_scores and chunk_ranges')
+
+        surprisal_scores = torch.as_tensor(surprisal_scores, device=value_states.device, dtype=torch.float32)
+        if surprisal_scores.numel() != total_len:
+            raise ValueError(
+                f'surprisal length mismatch: {surprisal_scores.numel()} vs total_len={total_len}'
+            )
+
+        # validate ranges and build per-chunk lengths
+        lengths = []
+        for start, end in chunk_ranges:
+            if not (0 <= start <= end <= doc_end):
+                raise ValueError(f'invalid chunk range ({start}, {end}) for doc_end={doc_end}')
+            lengths.append(end - start)
+        doc_total = sum(lengths)
+        if doc_total <= 0:
+            return torch.arange(doc_end, total_len, device=value_states.device)
+
+        topk_num = int(doc_total * reuse_config['recomp_ratio'])
+        topk_num = max(0, min(topk_num, doc_total))
+
+        chunk_budget = allocate_by_largest_remainder(lengths, topk_num)
+        selected_doc_indices = []
+        for (start, end), budget in zip(chunk_ranges, chunk_budget):
+            if budget <= 0:
+                continue
+            chunk_scores = surprisal_scores[start:end]
+            local_top = torch.topk(chunk_scores, k=budget, dim=-1).indices + start
+            selected_doc_indices.append(local_top)
+
+        if selected_doc_indices:
+            doc_indices = torch.cat(selected_doc_indices, dim=0)
+        else:
+            doc_indices = torch.empty(0, dtype=torch.long, device=value_states.device)
+
+        question_indices = torch.arange(doc_end, total_len, device=value_states.device)
+        top_indices = torch.cat([doc_indices, question_indices], dim=0)
+        top_indices = torch.unique(top_indices, sorted=True)
 
     return top_indices
 

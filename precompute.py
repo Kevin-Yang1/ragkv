@@ -61,6 +61,7 @@ if __name__ == '__main__':
         if flag == 'longbench':
             doc_ids, prompt_ids, answers, params, classes = batch[0]['doc_ids'], batch[0]['prompt_ids'], batch[0]['answer'], batch[0]['params'], batch[0]['all_classes']
             save_kvs(args, model, doc_ids, idx, params)
+            save_surprisal_chunkwise(args, model, doc_ids, prompt_ids, idx, params)
             # save_attns(args, model, prompt_ids, idx, params)
 
         if flag == 'needle':

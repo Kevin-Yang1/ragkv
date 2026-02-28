@@ -35,10 +35,23 @@ python ./chunk_ruler.py
 
 # step 2 - precompute
 bash ./scripts/precompute.sh
+# precompute now also saves token surprisal files:
+# kvs/{model}/{dataset}/item_{id}/surprisal.pt
 
 # step 3 - evaluate
 # for longbench
 bash ./scripts/eval_longbench.sh
+
+# optional: run longbench with surprisal-based token selection
+python ./eval_longbench.py \
+  --model /path/to/Meta-Llama-3-8B-Instruct \
+  --reuse surprisal_chunk \
+  --output_path ./outputs/Llama-3-8B-Instruct/surprisal_chunk/2wikimqa \
+  --dataset 2wikimqa \
+  --kv_path ./kvs/Llama-3-8B-Instruct/2wikimqa \
+  --drop False \
+  --drop_config None \
+  --rate 0.15
 
 # for needle
 bash ./scripts/eval_needle.sh

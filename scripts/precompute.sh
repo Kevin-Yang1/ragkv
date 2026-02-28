@@ -2,7 +2,7 @@ export HF_ENDPOINT=https://hf-mirror.com
 export TORCH_CUDA_ARCH_LIST="8.6"
 declare -A path_map
 path_map['Mistral-7B-Instruct']='../Models/LLMs/Mistral-7B-Instruct-v0.2'
-path_map['Llama-3-8B-Instruct']='/data/ykw/model/Meta-Llama-3-8B-Instruct'
+path_map['Llama-3-8B-Instruct']='/data/ykw/models/Meta-Llama-3-8B-Instruct'
 path_map['Qwen2.5-7B-Instruct']='../Models/LLMs/Qwen2.5-7B-Instruct'
 # -------------Edit here-------------
 export CUDA_VISIBLE_DEVICES=4,5

@@ -1,4 +1,5 @@
 #!/bin/bash
+set -euo pipefail
 # =============================================================================
 # LongBench 数据集评估脚本
 # =============================================================================
@@ -24,7 +25,7 @@ export TORCH_CUDA_ARCH_LIST="8.6"
 # 格式：path_map['模型简称']='模型实际路径'
 declare -A path_map
 path_map['Mistral-7B-Instruct']='../Models/LLMs/Mistral-7B-Instruct-v0.2'
-path_map['Llama-3-8B-Instruct']='../Models/LLMs/llama3/Meta-Llama-3-8B-Instruct'
+path_map['Llama-3-8B-Instruct']='/data/ykw/models/Meta-Llama-3-8B-Instruct'
 path_map['Qwen2.5-7B-Instruct']='../Models/LLMs/Qwen2.5-7B-Instruct'
 
 # 如果使用 Llama 3.1，可以添加：
@@ -38,7 +39,7 @@ path_map['Qwen2.5-7B-Instruct']='../Models/LLMs/Qwen2.5-7B-Instruct'
 # GPU 配置
 # -----------------------------------------------------------------------------
 # 指定使用的 GPU 编号（0,1,2... 或多卡如 0,1）
-export CUDA_VISIBLE_DEVICES=5
+export CUDA_VISIBLE_DEVICES=1
 
 # -----------------------------------------------------------------------------
 # 模型选择
@@ -55,6 +56,7 @@ model='Llama-3-8B-Instruct'
 # 可以添加多个策略进行对比实验
 declare -a reuse_list=(
     'debug'      # A³ 核心算法（基于注意力分数选择）- 推荐
+    # 'surprisal_chunk' # 基于离线 token 惊奇度（按 chunk 分配预算）
     # 'blend'    # 基于 Value 差异选择
     # 'full'     # 仅保留末尾 tokens（基线对照）
     # 'attnlink' # 使用 Sink tokens
@@ -95,6 +97,7 @@ declare -a dataset_list=(
     "passage_count"   # 段落计数
     "lcc"             # 长上下文代码补全
 )
+dataset_list=("2wikimqa")
 
 # 可选：添加更多数据集
 # "narrativeqa"     # 叙事问答
@@ -131,13 +134,13 @@ for reuse in "${reuse_list[@]}"; do
         # 执行评估脚本
         # ---------------------------------------------------------------------
         python ./eval_longbench.py \
-            --model ${path_map[$model]} \        # 模型路径
-            --reuse ${reuse} \                    # Token 选择策略
-            --output_path ${output_dir} \         # 输出目录
-            --dataset ${dataset} \                # 数据集名称
-            --kv_path ./kvs/${model}/${dataset} \ # 预计算的 KV Cache 路径
-            --drop ${drop} \                      # KV Cache 驱逐策略
-            --drop_config ${drop_config}          # 驱逐策略配置文件
+            --model ${path_map[$model]} \
+            --reuse ${reuse} \
+            --output_path ${output_dir} \
+            --dataset ${dataset} \
+            --kv_path ./kvs/${model}/${dataset} \
+            --drop ${drop} \
+            --drop_config ${drop_config}
 
         # 等待当前评估完成再继续下一个
         wait

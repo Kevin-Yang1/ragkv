@@ -18,7 +18,7 @@ LongBench 数据集分块脚本
     - transformers
     - torch
     - tqdm
-    
+
 作者：参考 A³ 项目
 =============================================================================
 """
@@ -36,7 +36,7 @@ import os
 # 最大上下文长度（tokens）
 # 如果文档超过此长度，会截取开头和结尾各一半
 # MAXLENGTH = 3500  # 适用于 Llama-3（8K 上下文）
-MAXLENGTH = 7000    # 适用于更长上下文的模型（如 Qwen2.5）
+MAXLENGTH = 7000  # 适用于更长上下文的模型（如 Qwen2.5）
 
 # 分块大小（tokens）
 # 每个 chunk 包含的 token 数量
@@ -48,7 +48,7 @@ CHUNKSIZE = 512
 # LongBench 基准测试中的 11 个数据集
 # 涵盖问答、摘要、分类等多种长上下文任务
 datasets = [
-    "2wikimqa",        # Wikipedia 多跳问答
+    "2wikimqa",  # Wikipedia 多跳问答
     # "qasper",          # 科学论文问答
     # "multifieldqa_en", # 多领域问答（英文）
     # "hotpotqa",        # 多跳推理问答
@@ -67,7 +67,7 @@ datasets = [
 # 选择用于 tokenization 的模型
 # 不同模型的 tokenizer 可能产生不同的 token 化结果
 # path = '../Models/LLMs/Qwen/Qwen2.5-7B-Instruct'
-path = '/data/ykw/model/Meta-Llama-3-8B-Instruct'
+path = "/data/ykw/models/Meta-Llama-3-8B-Instruct"
 # path = '../Models/LLMs/Mistral-7B-Instruct-v0.2'
 
 # 注意：path 必须与后续 precompute 和 eval 中使用的模型一致
@@ -77,7 +77,7 @@ path = '/data/ykw/model/Meta-Llama-3-8B-Instruct'
 # =============================================================================
 # 加载问题格式模板
 # question_format.json 定义了每个数据集的问题格式化方式
-questions_format = json.load(open('./config/longbench/question_format.json', 'r'))
+questions_format = json.load(open("./config/longbench/question_format.json", "r"))
 
 # 加载对应模型的 tokenizer
 tokenizer = AutoTokenizer.from_pretrained(path, trust_remote_code=True)
@@ -88,7 +88,7 @@ tokenizer = AutoTokenizer.from_pretrained(path, trust_remote_code=True)
 # 输出目录：保存分块后的数据
 # 格式：inputs/{model_name}/{dataset}.json
 # chunk_path = 'inputs/Qwen2.5-7B-Instruct'
-chunk_path = 'inputs/Meta-Llama-3-8B-Instruct'
+chunk_path = "inputs/Meta-Llama-3-8B-Instruct"
 # chunk_path = 'inputs/Mistral-7B-Instruct-v0.2'
 
 # 创建输出目录（如果不存在）
@@ -107,16 +107,16 @@ for dataset in tqdm(datasets, desc="处理数据集"):
     # 获取当前数据集的问题格式模板
     question_format = questions_format[dataset]
     chunk_data = []
-    
+
     # 读取原始数据文件
     # 文件格式：每行一个 JSON 对象（JSONL）
-    input_file = f'./data/longbench/{dataset}_e.jsonl'
-    
-    with open(input_file, 'r', encoding='utf-8') as file:
+    input_file = f"./data/longbench/{dataset}_e.jsonl"
+
+    with open(input_file, "r", encoding="utf-8") as file:
         for line in file:
             # 解析每一行的 JSON 数据
             item = json.loads(line)
-            
+
             # -------------------------------------------------------------------------
             # 数据结构说明：
             # item = {
@@ -126,34 +126,39 @@ for dataset in tqdm(datasets, desc="处理数据集"):
             #     其他字段...             # 用于格式化问题的字段
             # }
             # -------------------------------------------------------------------------
-            
+
             chunk_list = []
-            
+
             # 使用模板格式化问题
             # 例如："Question: {input}\nAnswer:"
             question = question_format.format(**item)
-            
+
             # 提取答案和分类信息
-            context = item['context']
-            answers = item['answers']
-            classes = item['all_classes']
-            
+            context = item["context"]
+            answers = item["answers"]
+            classes = item["all_classes"]
+
             # -------------------------------------------------------------------------
             # Tokenization 和截断处理
             # -------------------------------------------------------------------------
             # 将文本转换为 token IDs
-            tokenized_context = tokenizer(context, truncation=False, return_tensors='pt').input_ids[0]
-            
+            tokenized_context = tokenizer(
+                context, truncation=False, return_tensors="pt"
+            ).input_ids[0]
+
             # 如果超过最大长度，进行截断
             if len(tokenized_context) > MAXLENGTH:
                 # 策略：保留开头和结尾各一半
                 # 这样可以保留文档的开始和结束部分，通常包含重要信息
                 half = int(MAXLENGTH / 2)
-                tokenized_context = torch.cat([
-                    tokenized_context[:half],      # 前半部分
-                    tokenized_context[-half:]      # 后半部分
-                ], dim=0)
-            
+                tokenized_context = torch.cat(
+                    [
+                        tokenized_context[:half],  # 前半部分
+                        tokenized_context[-half:],  # 后半部分
+                    ],
+                    dim=0,
+                )
+
             # -------------------------------------------------------------------------
             # 分块处理
             # -------------------------------------------------------------------------
@@ -161,14 +166,14 @@ for dataset in tqdm(datasets, desc="处理数据集"):
             # 例如：CHUNKSIZE=512，则每个 chunk 包含 512 个 tokens
             for i in range(0, tokenized_context.shape[0], CHUNKSIZE):
                 # 提取当前 chunk 的 token IDs
-                chunk_tokens = tokenized_context[i:i+CHUNKSIZE]
-                
+                chunk_tokens = tokenized_context[i : i + CHUNKSIZE]
+
                 # 解码回文本
                 chunk_text = tokenizer.decode(chunk_tokens, skip_special_tokens=True)
-                
+
                 # 添加到 chunk 列表
                 chunk_list.append(chunk_text)
-            
+
             # -------------------------------------------------------------------------
             # 保存分块数据
             # -------------------------------------------------------------------------
@@ -179,18 +184,20 @@ for dataset in tqdm(datasets, desc="处理数据集"):
             #     'answers': list,                   # 标准答案
             #     'all_classes': list                # 分类类别
             # }
-            chunk_data.append({
-                'chunks': chunk_list,
-                'question': question,
-                'answers': answers,
-                'all_classes': classes
-            })
-    
+            chunk_data.append(
+                {
+                    "chunks": chunk_list,
+                    "question": question,
+                    "answers": answers,
+                    "all_classes": classes,
+                }
+            )
+
     # 保存到文件
-    output_file = os.path.join(chunk_path, f'{dataset}.json')
-    with open(output_file, 'w', encoding='utf-8') as f:
+    output_file = os.path.join(chunk_path, f"{dataset}.json")
+    with open(output_file, "w", encoding="utf-8") as f:
         json.dump(chunk_data, f, indent=4, ensure_ascii=False)
-    
+
     # tqdm 会自动显示进度条
 
 print("-" * 80)

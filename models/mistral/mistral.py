@@ -436,7 +436,12 @@ def MistralSdpaAttention_Forward(
     if reuse_config:
         if reuse_config['check']:
             if reuse_config['mask'] is None:
-                unpacked_mask, reuse_config['mask'] = create_flashinfer_mask(query_states, key_states, reuse_config['imp_indices'])
+                unpacked_mask, reuse_config['mask'] = create_flashinfer_mask(
+                    query_states,
+                    key_states,
+                    reuse_config['imp_indices'],
+                    reuse_config.get('causal', True),
+                )
 
             causal_mask = reuse_config['mask']
             is_causal = False

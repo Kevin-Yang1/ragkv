@@ -161,6 +161,22 @@
 5. `topk_num` 边界未保护  
 - `int(...)` 可能得到 0；当候选长度或比例极端时，`topk` 可能触发异常或退化行为，建议显式 `clamp`。
 
+#### 5.2.6 已落地：`surprisal_chunk` 策略
+- 离线阶段（`precompute.py`）新增了 `save_surprisal_chunkwise(...)`：
+  - 对 `doc_ids` 的每一段独立计算 token surprisal；
+  - 再按与 `prompt_ids` 相同的拼接规则对齐；
+  - 保存到 `kvs/{model}/{dataset}/item_{id}/surprisal.pt`。
+- 在线阶段（`eval_longbench.py`）在 `reuse=surprisal_chunk` 时加载并校验：
+  - `scores` 长度必须等于 `prompt_ids` 长度；
+  - `chunk_ranges` 必须与当前样本重建的区间一致；
+  - 缺失或不一致直接报错终止（fail-fast）。
+- 选点逻辑（`reuse_utils.py`）：
+  - 只在文档 chunks 范围内选点；
+  - 总预算 `K=int(doc_total_len * rate)`；
+  - 按 chunk 长度比例分配 `k_i`（`floor + 最大余数`）；
+  - 每个 chunk 内部按 surprisal top-`k_i` 选 token；
+  - question 区全部强制保留。
+
 ### 5.3 掩码与注意力计算
 - 使用 `flashinfer.packbits` 打包自定义掩码
 - 使用 `flashinfer.single_prefill_with_kv_cache` 执行 prefill 注意力
