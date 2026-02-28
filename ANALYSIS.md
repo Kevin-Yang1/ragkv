@@ -162,10 +162,14 @@
 - `int(...)` 可能得到 0；当候选长度或比例极端时，`topk` 可能触发异常或退化行为，建议显式 `clamp`。
 
 #### 5.2.6 已落地：`surprisal_chunk` 策略
-- 离线阶段（`precompute.py`）新增了 `save_surprisal_chunkwise(...)`：
-  - 对 `doc_ids` 的每一段独立计算 token surprisal；
-  - 再按与 `prompt_ids` 相同的拼接规则对齐；
-  - 保存到 `kvs/{model}/{dataset}/item_{id}/surprisal.pt`。
+- 离线阶段（`precompute.py`）通过 `--save_surprisal` 可选开启 surprisal 提取：
+  - 默认仅保存 `kvs.pt`；
+  - 开启后在 `save_kvs(...)` 的同一次前向中同步提取 surprisal（不再额外二次前向）；
+  - 结果保存到 `kvs/{model}/{dataset}/item_{id}/surprisal.pt`。
+- surprisal 计算公式已改为低显存路径：
+  - `token_nll = cross_entropy(shift_logits, shift_targets, reduction='none')`；
+  - chunk 首 token 分数为 0，其余位置为 `-log p(x_t|x_<t)`；
+  - 中间 doc chunk 仍按 `doc_start_len` 对齐后拼接。
 - 在线阶段（`eval_longbench.py`）在 `reuse=surprisal_chunk` 时加载并校验：
   - `scores` 长度必须等于 `prompt_ids` 长度；
   - `chunk_ranges` 必须与当前样本重建的区间一致；

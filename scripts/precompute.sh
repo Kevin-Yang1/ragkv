@@ -10,7 +10,14 @@ export CUDA_VISIBLE_DEVICES=4,5
 # model='Mistral-7B-Instruct'
 model='Llama-3-8B-Instruct'
 # model='Qwen2.5-7B-Instruct'
+# save_surprisal=true
 # -------------Edit here-------------
+
+save_surprisal=${save_surprisal:-false}
+save_surprisal_flag=""
+if [ "${save_surprisal}" = "true" ]; then
+    save_surprisal_flag="--save_surprisal"
+fi
 
 # precompute
 declare -a dataset_list=(
@@ -51,6 +58,7 @@ for dataset in "${dataset_list[@]}"; do
         --model ${path_map[$model]} \
         --kv_path ${output_dir} \
         --dataset ${dataset} \
+        ${save_surprisal_flag}
 
     wait
 done

@@ -35,7 +35,9 @@ python ./chunk_ruler.py
 
 # step 2 - precompute
 bash ./scripts/precompute.sh
-# precompute now also saves token surprisal files:
+# default precompute only saves kvs.pt
+# enable token surprisal extraction with:
+# python ./precompute.py ... --save_surprisal
 # kvs/{model}/{dataset}/item_{id}/surprisal.pt
 
 # step 3 - evaluate

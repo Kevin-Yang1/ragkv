@@ -45,54 +45,87 @@ def allocate_by_largest_remainder(lengths, total_k):
     return alloc
 
 def get_topindices(reuse_config, other_config, query_states, key_states, value_states, value_old, kvgroups):
-    if 'blend' in reuse_config['reuse']: 
+    """
+    根据 `reuse_config['reuse']` 指定的策略，选出需要“重新计算/重点保留”的 token 索引。
+
+    参数说明：
+    - reuse_config: 复用策略配置，至少包含 `reuse` 和可能用到的 `recomp_ratio` 等字段。
+    - other_config: 运行时数据配置，常用字段在 `other_config['data_params']`：
+      - `last_len`: 末尾 query 段长度（通常会被强制保留）
+      - `prefix_len`: 前缀长度（debug 策略中用于索引偏移）
+      - `sink_pos`: attnlink 策略下直接复用的重要索引
+    - query_states/key_states/value_states: 当前层 Q/K/V 状态张量。
+    - value_old: 历史 value（用于 blend 策略下比较变化幅度）。
+    - kvgroups: KV 分组数（debug 策略中用于扩展 key head 维度）。
+
+    返回：
+    - top_indices: 1D Long Tensor，表示被选中的 token 位置索引。
+    """
+    if 'blend' in reuse_config['reuse']:
+        # blend: 在文档区(去掉末尾 last_len)中，按 value 新旧差异的平方和选 top-k；
+        # 然后无条件拼接末尾 last_len（保证最近 token 始终保留）。
         last_len = other_config['data_params']['last_len']
         total_len = value_states.shape[2]
-        last_indices = [total_len-last_len+l for l in range(last_len)]
-        
-        topk_num = int((total_len-last_len)*reuse_config['recomp_ratio'])
-        
-        temp_diff = torch.sum((value_states[:,:,:-last_len,:]-value_old[:,:,:-last_len,:])**2, dim=[0,1,3])
-        top_indices = torch.topk(temp_diff, k=topk_num).indices # (, topk_num)
+        last_indices = [total_len - last_len + l for l in range(last_len)]
+
+        topk_num = int((total_len - last_len) * reuse_config['recomp_ratio'])
+
+        temp_diff = torch.sum((value_states[:, :, :-last_len, :] - value_old[:, :, :-last_len, :]) ** 2, dim=[0, 1, 3])
+        top_indices = torch.topk(temp_diff, k=topk_num).indices  # shape: [topk_num]
         top_indices, _ = torch.sort(top_indices)
         top_indices = torch.cat([top_indices, torch.tensor(last_indices, device=top_indices.device)])
 
-    elif 'attnlink' in reuse_config['reuse']: 
+    elif 'attnlink' in reuse_config['reuse']:
+        # attnlink: 直接使用预先给定的 sink 位置作为重要索引。
         reuse_config['imp_indices'] = other_config['data_params']['sink_pos']
         top_indices = reuse_config['imp_indices']
 
-    elif 'full' in reuse_config['reuse']: 
+    elif 'full' in reuse_config['reuse']:
+        # full: 仅保留末尾 last_len。
         last_len = other_config['data_params']['last_len']
         total_len = value_states.shape[2]
-        last_indices = [total_len-last_len+l for l in range(last_len)]
+        last_indices = [total_len - last_len + l for l in range(last_len)]
 
         top_indices = torch.tensor(last_indices, device=value_states.device)
-    
+
     elif 'cat' in reuse_config['reuse']:
+        # cat: 仅保留最后一个 token。
         last_len = other_config['data_params']['last_len']
         total_len = value_states.shape[2]
-        last_indices = [total_len-1]
+        last_indices = [total_len - 1]
 
         top_indices = torch.tensor(last_indices, device=value_states.device)
 
     elif 'debug' in reuse_config['reuse']:
+        # debug:
+        # 1) 先估计末尾 query 对历史 key 的注意力总量；
+        # 2) 用 1D 平均池化平滑得分；
+        # 3) 在文档区中按得分选 top-k；
+        # 4) 再拼接末尾 last_len，保证近期 token 全部包含。
         kernel_size = 5
         last_len = other_config['data_params']['last_len']
         total_len = value_states.shape[2]
-        
-        attn_weights_sum = compute_attention_sum_wo_head(query_states, repeat_kv(key_states[:,:, other_config['data_params']['prefix_len']:,:], kvgroups), last_len)
-        attn_cache = F.avg_pool1d(attn_weights_sum, kernel_size = kernel_size, padding=kernel_size//2, stride=1)
-        topk_num = int((total_len-last_len)*reuse_config['recomp_ratio'])
 
-        
-        top_indices = attn_cache.topk(topk_num, dim=-1).indices.squeeze(0)+other_config['data_params']['prefix_len']
-        # import pdb; pdb.set_trace()
+        attn_weights_sum = compute_attention_sum_wo_head(
+            query_states,
+            repeat_kv(key_states[:, :, other_config['data_params']['prefix_len']:, :], kvgroups),
+            last_len
+        )
+        attn_cache = F.avg_pool1d(attn_weights_sum, kernel_size=kernel_size, padding=kernel_size // 2, stride=1)
+        topk_num = int((total_len - last_len) * reuse_config['recomp_ratio'])
+
+        top_indices = attn_cache.topk(topk_num, dim=-1).indices.squeeze(0) + other_config['data_params']['prefix_len']
         total_len = value_states.shape[2]
         last_indices = torch.arange(total_len - last_len, total_len, device=top_indices.device)
 
         top_indices = torch.cat([top_indices, last_indices])
 
     elif 'surprisal_chunk' in reuse_config['reuse']:
+        # surprisal_chunk:
+        # - 将文档区按 chunk 切分；
+        # - 先按 chunk 长度比例分配预算（largest remainder）；
+        # - 每个 chunk 内按 surprisal 选 top；
+        # - 最后拼接 question 区(末尾 last_len)并去重排序。
         last_len = other_config['data_params']['last_len']
         total_len = value_states.shape[2]
         doc_end = total_len - last_len
@@ -108,7 +141,7 @@ def get_topindices(reuse_config, other_config, query_states, key_states, value_s
                 f'surprisal length mismatch: {surprisal_scores.numel()} vs total_len={total_len}'
             )
 
-        # validate ranges and build per-chunk lengths
+        # 校验每个 chunk 的范围合法，并统计各 chunk 长度。
         lengths = []
         for start, end in chunk_ranges:
             if not (0 <= start <= end <= doc_end):
@@ -121,6 +154,7 @@ def get_topindices(reuse_config, other_config, query_states, key_states, value_s
         topk_num = int(doc_total * reuse_config['recomp_ratio'])
         topk_num = max(0, min(topk_num, doc_total))
 
+        # 预算按 chunk 分配后，在 chunk 内各自取 top，避免长 chunk 完全占满预算。
         chunk_budget = allocate_by_largest_remainder(lengths, topk_num)
         selected_doc_indices = []
         for (start, end), budget in zip(chunk_ranges, chunk_budget):
