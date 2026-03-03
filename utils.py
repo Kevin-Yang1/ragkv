@@ -192,6 +192,9 @@ def initialize_config(args):
         if args.reuse == "surprisal_chunk":
             reuse_config["surprisal_scores"] = None
             reuse_config["chunk_ranges"] = None
+        if args.reuse == "blend_debug":
+            reuse_config["blend_debug_fusion"] = getattr(args, "blend_debug_fusion", "mul")
+            reuse_config["blend_debug_alpha"] = 0.5
     else:
         reuse_config = None
 

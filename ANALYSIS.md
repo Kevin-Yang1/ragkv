@@ -181,6 +181,21 @@
   - 每个 chunk 内部按 surprisal top-`k_i` 选 token；
   - question 区全部强制保留。
 
+#### 5.2.7 已落地：`blend_debug` 融合策略
+- 在线阶段新增 `reuse=blend_debug`，将两类信号融合后选点：
+  - `blend`：新旧 value 在 token 维度的 L2 差异（KV gap）；
+  - `debug`：当前 query 对历史 key 的注意力汇总（query relevance）。
+- 候选范围与保留规则：
+  - 仅文档区参与 top-k 竞争（`[prefix_len, total_len-last_len)`）；
+  - question 区（`[total_len-last_len, total_len)`）强制保留。
+- 融合算子（`--blend_debug_fusion`）：
+  - `mul`（默认）：`minmax(blend) * minmax(debug)`；
+  - `sum`：`0.5 * minmax(blend) + 0.5 * minmax(debug)`；
+  - `rank`：`0.5 * ranknorm(blend) + 0.5 * ranknorm(debug)`。
+- 预算规则：
+  - `topk_num = int(doc_len * recomp_ratio)`，并 clamp 到 `[0, doc_len]`；
+  - 最终索引为 `doc_topk + question_all`，去重并升序。
+
 ### 5.3 掩码与注意力计算
 - 使用 `flashinfer.packbits` 打包自定义掩码
 - 使用 `flashinfer.single_prefill_with_kv_cache` 执行 prefill 注意力

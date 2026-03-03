@@ -17,6 +17,8 @@ def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
     return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
 
 def get_layer(reuse_method):
+    if reuse_method == 'blend_debug':
+        return 1
     if 'blend' in reuse_method:
         return 1 # compute imp indices at layer 1
     if 'debug' in reuse_method:
@@ -44,6 +46,41 @@ def allocate_by_largest_remainder(lengths, total_k):
             alloc[idx] += 1
     return alloc
 
+
+def minmax_norm(x, eps=1e-12):
+    if x.numel() == 0:
+        return x
+    x = x.to(torch.float32)
+    x_min = torch.min(x)
+    x_max = torch.max(x)
+    denom = x_max - x_min
+    if torch.abs(denom) <= eps:
+        return torch.zeros_like(x)
+    return (x - x_min) / (denom + eps)
+
+
+def rank_norm(x):
+    if x.numel() == 0:
+        return x
+    x = x.to(torch.float32)
+    n = x.numel()
+    if n == 1:
+        return torch.ones_like(x)
+    order = torch.argsort(x, descending=True)
+    ranks = torch.empty(n, device=x.device, dtype=torch.float32)
+    ranks[order] = torch.arange(n, device=x.device, dtype=torch.float32)
+    return 1.0 - ranks / (n - 1)
+
+
+def fuse_blend_debug_scores(blend_score, debug_score, method, alpha):
+    if method == 'mul':
+        return minmax_norm(blend_score) * minmax_norm(debug_score)
+    if method == 'sum':
+        return alpha * minmax_norm(blend_score) + (1.0 - alpha) * minmax_norm(debug_score)
+    if method == 'rank':
+        return alpha * rank_norm(blend_score) + (1.0 - alpha) * rank_norm(debug_score)
+    raise ValueError(f"unsupported blend_debug_fusion: {method}")
+
 def get_topindices(reuse_config, other_config, query_states, key_states, value_states, value_old, kvgroups):
     """
     根据 `reuse_config['reuse']` 指定的策略，选出需要“重新计算/重点保留”的 token 索引。
@@ -61,7 +98,59 @@ def get_topindices(reuse_config, other_config, query_states, key_states, value_s
     返回：
     - top_indices: 1D Long Tensor，表示被选中的 token 位置索引。
     """
-    if 'blend' in reuse_config['reuse']:
+    if reuse_config['reuse'] == 'blend_debug':
+        last_len = other_config['data_params']['last_len']
+        prefix_len = other_config['data_params']['prefix_len']
+        total_len = value_states.shape[2]
+        doc_start = max(0, min(prefix_len, total_len))
+        doc_end = max(doc_start, total_len - last_len)
+        doc_len = doc_end - doc_start
+
+        question_indices = torch.arange(doc_end, total_len, device=value_states.device)
+        if doc_len <= 0:
+            return question_indices
+
+        topk_num = int(doc_len * reuse_config['recomp_ratio'])
+        topk_num = max(0, min(topk_num, doc_len))
+
+        blend_score_doc = torch.sum(
+            (
+                value_states[:, :, doc_start:doc_end, :]
+                - value_old[:, :, doc_start:doc_end, :]
+            ) ** 2,
+            dim=[0, 1, 3],
+        )
+
+        debug_score_doc = compute_attention_sum_wo_head(
+            query_states,
+            repeat_kv(key_states[:, :, doc_start:, :], kvgroups),
+            last_len,
+        ).reshape(-1)
+        if debug_score_doc.numel() != doc_len:
+            raise ValueError(
+                f'blend_debug score length mismatch: debug={debug_score_doc.numel()} vs doc_len={doc_len}'
+            )
+
+        fusion_method = reuse_config.get('blend_debug_fusion', 'mul')
+        alpha = float(reuse_config.get('blend_debug_alpha', 0.5))
+        fused_score_doc = fuse_blend_debug_scores(
+            blend_score_doc,
+            debug_score_doc,
+            fusion_method,
+            alpha,
+        )
+
+        if topk_num > 0:
+            doc_top_local = torch.topk(fused_score_doc, k=topk_num, dim=-1).indices
+            doc_top_local, _ = torch.sort(doc_top_local)
+            doc_indices = doc_top_local + doc_start
+        else:
+            doc_indices = torch.empty(0, dtype=torch.long, device=value_states.device)
+
+        top_indices = torch.cat([doc_indices, question_indices], dim=0)
+        top_indices = torch.unique(top_indices, sorted=True)
+
+    elif 'blend' in reuse_config['reuse']:
         # blend: 在文档区(去掉末尾 last_len)中，按 value 新旧差异的平方和选 top-k；
         # 然后无条件拼接末尾 last_len（保证最近 token 始终保留）。
         last_len = other_config['data_params']['last_len']

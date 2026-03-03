@@ -58,10 +58,14 @@ declare -a reuse_list=(
     'debug'      # A³ 核心算法（基于注意力分数选择）- 推荐
     # 'surprisal_chunk' # 基于离线 token 惊奇度（按 chunk 分配预算）
     # 'blend'    # 基于 Value 差异选择
+    # 'blend_debug' # 融合 blend + debug（同时考虑KV差异和query关注）
     # 'full'     # 仅保留末尾 tokens（基线对照）
     # 'attnlink' # 使用 Sink tokens
     # 'cat'      # 极限压缩（仅保留最后 1 个 token）
 )
+
+# blend_debug 融合算子：mul/sum/rank
+blend_debug_fusion=mul
 
 # -----------------------------------------------------------------------------
 # KV Cache 驱逐策略配置（Drop Strategy）
@@ -136,6 +140,7 @@ for reuse in "${reuse_list[@]}"; do
         python ./eval_longbench.py \
             --model ${path_map[$model]} \
             --reuse ${reuse} \
+            --blend_debug_fusion ${blend_debug_fusion} \
             --output_path ${output_dir} \
             --dataset ${dataset} \
             --kv_path ./kvs/${model}/${dataset} \

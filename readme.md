@@ -55,6 +55,18 @@ python ./eval_longbench.py \
   --drop_config None \
   --rate 0.15
 
+# optional: run longbench with blend_debug fusion strategy
+python ./eval_longbench.py \
+  --model /path/to/Meta-Llama-3-8B-Instruct \
+  --reuse blend_debug \
+  --blend_debug_fusion mul \
+  --output_path ./outputs/Llama-3-8B-Instruct/blend_debug/2wikimqa \
+  --dataset 2wikimqa \
+  --kv_path ./kvs/Llama-3-8B-Instruct/2wikimqa \
+  --drop False \
+  --drop_config None \
+  --rate 0.15
+
 # for needle
 bash ./scripts/eval_needle.sh
 python ./visualize.py
