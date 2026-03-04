@@ -37,8 +37,9 @@ def save_kvs(args, model, doc_ids, item_id, params, prompt_ids=None, save_surpri
             temp_k = past_key_values[0][:, :, params["doc_start_len"] :, :].clone()
             temp_v = past_key_values[1][:, :, params["doc_start_len"] :, :].clone()
 
-        return temp_k[0].to("cuda:0"), temp_v[0].to(
-            "cuda:0"
+        # 在 CPU 端累计 KV，避免长样本在 GPU 上 cat/stack 触发显存峰值。
+        return temp_k[0].to("cpu"), temp_v[0].to(
+            "cpu"
         )  # (num_key_value_heads, n, head_dim)
 
     def get_chunk_surprisal(logits, input_ids):
@@ -192,6 +193,8 @@ def initialize_config(args):
         if args.reuse == "surprisal_chunk":
             reuse_config["surprisal_scores"] = None
             reuse_config["chunk_ranges"] = None
+        if args.reuse in {"blend", "blend_debug"}:
+            reuse_config["blend_gap_source"] = getattr(args, "blend_gap_source", "v")
         if args.reuse == "blend_debug":
             reuse_config["blend_debug_fusion"] = getattr(args, "blend_debug_fusion", "mul")
             reuse_config["blend_debug_alpha"] = 0.5

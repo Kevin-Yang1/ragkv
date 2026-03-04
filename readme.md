@@ -59,6 +59,7 @@ python ./eval_longbench.py \
 python ./eval_longbench.py \
   --model /path/to/Meta-Llama-3-8B-Instruct \
   --reuse blend_debug \
+  --blend_gap_source k \
   --blend_debug_fusion mul \
   --output_path ./outputs/Llama-3-8B-Instruct/blend_debug/2wikimqa \
   --dataset 2wikimqa \

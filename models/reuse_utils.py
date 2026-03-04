@@ -81,7 +81,34 @@ def fuse_blend_debug_scores(blend_score, debug_score, method, alpha):
         return alpha * rank_norm(blend_score) + (1.0 - alpha) * rank_norm(debug_score)
     raise ValueError(f"unsupported blend_debug_fusion: {method}")
 
-def get_topindices(reuse_config, other_config, query_states, key_states, value_states, value_old, kvgroups):
+def compute_blend_gap_score(
+    gap_source,
+    key_states,
+    value_states,
+    key_old,
+    value_old,
+    start,
+    end,
+):
+    if gap_source == "v":
+        diff = value_states[:, :, start:end, :] - value_old[:, :, start:end, :]
+    elif gap_source == "k":
+        diff = key_states[:, :, start:end, :] - key_old[:, :, start:end, :]
+    else:
+        raise ValueError(f"unsupported blend_gap_source: {gap_source}")
+    return torch.sum(diff ** 2, dim=[0, 1, 3])
+
+
+def get_topindices(
+    reuse_config,
+    other_config,
+    query_states,
+    key_states,
+    value_states,
+    key_old,
+    value_old,
+    kvgroups,
+):
     """
     根据 `reuse_config['reuse']` 指定的策略，选出需要“重新计算/重点保留”的 token 索引。
 
@@ -92,7 +119,7 @@ def get_topindices(reuse_config, other_config, query_states, key_states, value_s
       - `prefix_len`: 前缀长度（debug 策略中用于索引偏移）
       - `sink_pos`: attnlink 策略下直接复用的重要索引
     - query_states/key_states/value_states: 当前层 Q/K/V 状态张量。
-    - value_old: 历史 value（用于 blend 策略下比较变化幅度）。
+    - key_old/value_old: 历史 K/V（用于 blend 相关策略比较变化幅度）。
     - kvgroups: KV 分组数（debug 策略中用于扩展 key head 维度）。
 
     返回：
@@ -113,12 +140,15 @@ def get_topindices(reuse_config, other_config, query_states, key_states, value_s
         topk_num = int(doc_len * reuse_config['recomp_ratio'])
         topk_num = max(0, min(topk_num, doc_len))
 
-        blend_score_doc = torch.sum(
-            (
-                value_states[:, :, doc_start:doc_end, :]
-                - value_old[:, :, doc_start:doc_end, :]
-            ) ** 2,
-            dim=[0, 1, 3],
+        gap_source = reuse_config.get("blend_gap_source", "v")
+        blend_score_doc = compute_blend_gap_score(
+            gap_source,
+            key_states,
+            value_states,
+            key_old,
+            value_old,
+            doc_start,
+            doc_end,
         )
 
         debug_score_doc = compute_attention_sum_wo_head(
@@ -158,8 +188,16 @@ def get_topindices(reuse_config, other_config, query_states, key_states, value_s
         last_indices = [total_len - last_len + l for l in range(last_len)]
 
         topk_num = int((total_len - last_len) * reuse_config['recomp_ratio'])
-
-        temp_diff = torch.sum((value_states[:, :, :-last_len, :] - value_old[:, :, :-last_len, :]) ** 2, dim=[0, 1, 3])
+        gap_source = reuse_config.get("blend_gap_source", "v")
+        temp_diff = compute_blend_gap_score(
+            gap_source,
+            key_states,
+            value_states,
+            key_old,
+            value_old,
+            0,
+            total_len - last_len,
+        )
         top_indices = torch.topk(temp_diff, k=topk_num).indices  # shape: [topk_num]
         top_indices, _ = torch.sort(top_indices)
         top_indices = torch.cat([top_indices, torch.tensor(last_indices, device=top_indices.device)])

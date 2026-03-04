@@ -34,6 +34,7 @@ Usage:
     --dataset <dataset|a,b,c|all> \
     --reuse <reuse_method> \
     --rate <float> \
+    [--blend_gap_source <v|k>] \
     [--blend_debug_fusion <mul|sum|rank>] \
     [--drop <False|Streaming|SnapKV...>] \
     [--drop_config <path|None>] \
@@ -45,9 +46,11 @@ Usage:
 Examples:
   bash scripts/run_longbench_pipeline.sh \
     --model Llama-3-8B-Instruct \
-    --dataset 2wikimqa,hotpotqa \
-    --reuse debug \
-    --rate 0.15
+    --dataset qasper,trec,triviaqa,samsum \
+    --reuse blend_debug \
+    --blend_gap_source k \
+    --rate 0.15 \
+    --cuda_visible_devices 0
 
   bash scripts/run_longbench_pipeline.sh \
     --model /data/ykw/models/Meta-Llama-3-8B-Instruct \
@@ -143,6 +146,7 @@ MODEL_ARG=""
 DATASET_ARG=""
 REUSE=""
 RATE=""
+BLEND_GAP_SOURCE="v"
 BLEND_DEBUG_FUSION="mul"
 DROP="False"
 DROP_CONFIG="None"
@@ -171,6 +175,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --rate)
       RATE="${2:-}"
+      shift 2
+      ;;
+    --blend_gap_source)
+      BLEND_GAP_SOURCE="${2:-}"
       shift 2
       ;;
     --blend_debug_fusion)
@@ -216,6 +224,7 @@ done
 [[ -z "${REUSE}" ]] && die "--reuse is required"
 [[ -z "${RATE}" ]] && die "--rate is required"
 
+[[ "${BLEND_GAP_SOURCE}" =~ ^(v|k)$ ]] || die "--blend_gap_source must be one of: v,k"
 [[ "${BLEND_DEBUG_FUSION}" =~ ^(mul|sum|rank)$ ]] || die "--blend_debug_fusion must be one of: mul,sum,rank"
 [[ "${MAX_LENGTH}" =~ ^[0-9]+$ ]] || die "--max_length must be a positive integer"
 [[ "${CHUNK_SIZE}" =~ ^[0-9]+$ ]] || die "--chunk_size must be a positive integer"
@@ -258,6 +267,9 @@ fi
 
 RATE_TAG="${RATE}"
 OUTPUT_TAG="${REUSE}_rate${RATE_TAG}"
+if [[ "${REUSE}" == "blend" || "${REUSE}" == "blend_debug" ]]; then
+  OUTPUT_TAG="${OUTPUT_TAG}_gap${BLEND_GAP_SOURCE}"
+fi
 if [[ "${DROP}" != "False" ]]; then
   # 开启 drop 时追加标签，避免不同配置结果互相覆盖。
   DROP_TAG="${DROP//\//_}"
@@ -274,6 +286,7 @@ log "pipeline start"
 log "model_arg=${MODEL_ARG} model_path=${MODEL_PATH} model_basename=${MODEL_BASENAME}"
 log "datasets=${DATASETS[*]}"
 log "reuse=${REUSE} rate=${RATE} drop=${DROP} drop_config=${DROP_CONFIG}"
+log "blend_gap_source=${BLEND_GAP_SOURCE} blend_debug_fusion=${BLEND_DEBUG_FUSION}"
 log "max_length=${MAX_LENGTH} chunk_size=${CHUNK_SIZE} dry_run=${DRY_RUN}"
 
 for dataset in "${DATASETS[@]}"; do
@@ -316,6 +329,7 @@ for dataset in "${DATASETS[@]}"; do
     python ./eval_longbench.py
     --model "${MODEL_PATH}"
     --reuse "${REUSE}"
+    --blend_gap_source "${BLEND_GAP_SOURCE}"
     --blend_debug_fusion "${BLEND_DEBUG_FUSION}"
     --output_path "${OUTPUT_DIR}"
     --dataset "${dataset}"

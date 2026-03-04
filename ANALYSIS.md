@@ -183,8 +183,12 @@
 
 #### 5.2.7 已落地：`blend_debug` 融合策略
 - 在线阶段新增 `reuse=blend_debug`，将两类信号融合后选点：
-  - `blend`：新旧 value 在 token 维度的 L2 差异（KV gap）；
+  - `blend`：新旧 K/V 在 token 维度的 L2 差异（KV gap，默认用 V，可切换 K）；
   - `debug`：当前 query 对历史 key 的注意力汇总（query relevance）。
+- gap 来源新增参数：
+  - `--blend_gap_source {v|k}`，默认 `v`；
+  - 同时作用于 `reuse=blend` 和 `reuse=blend_debug` 的 blend 分量；
+  - 仅改变 gap 分量，不改变 debug 分量。
 - 候选范围与保留规则：
   - 仅文档区参与 top-k 竞争（`[prefix_len, total_len-last_len)`）；
   - question 区（`[total_len-last_len, total_len)`）强制保留。

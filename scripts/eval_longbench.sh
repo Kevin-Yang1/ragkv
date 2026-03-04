@@ -66,6 +66,8 @@ declare -a reuse_list=(
 
 # blend_debug 融合算子：mul/sum/rank
 blend_debug_fusion=mul
+# blend / blend_debug 的差异来源：v|k
+blend_gap_source=v
 
 # -----------------------------------------------------------------------------
 # KV Cache 驱逐策略配置（Drop Strategy）
@@ -140,6 +142,7 @@ for reuse in "${reuse_list[@]}"; do
         python ./eval_longbench.py \
             --model ${path_map[$model]} \
             --reuse ${reuse} \
+            --blend_gap_source ${blend_gap_source} \
             --blend_debug_fusion ${blend_debug_fusion} \
             --output_path ${output_dir} \
             --dataset ${dataset} \

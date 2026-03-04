@@ -1,4 +1,5 @@
 import argparse
+import itertools
 import json
 import os
 import random
@@ -240,6 +241,20 @@ def flush_result_json(result_json_path, saved_results):
     os.replace(tmp_path, result_json_path)
 
 
+def load_existing_results(result_json_path):
+    """Load existing result.json for resume. Returns [] if not found/empty."""
+    if not os.path.exists(result_json_path):
+        return []
+    if os.path.getsize(result_json_path) == 0:
+        return []
+
+    with open(result_json_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    if not isinstance(data, list):
+        raise ValueError(f"invalid result.json format (expect list): {result_json_path}")
+    return data
+
+
 def init_recomputed_chunks_txt(path):
     with open(path, "w", encoding="utf-8") as f:
         f.write("")
@@ -262,6 +277,9 @@ def parse_args():
     parse.add_argument("--model", type=str, default=None)
     parse.add_argument("--reuse", type=str, default="fp16")
     parse.add_argument(
+        "--blend_gap_source", type=str, choices=["v", "k"], default="v"
+    )
+    parse.add_argument(
         "--blend_debug_fusion", type=str, choices=["mul", "sum", "rank"], default="mul"
     )
     parse.add_argument("--output_path", type=str, default=None)
@@ -283,8 +301,9 @@ if __name__ == "__main__":
     os.makedirs(args.output_path, exist_ok=True)
     result_json_path = os.path.join(args.output_path, "result.json")
     recomputed_chunks_path = os.path.join(args.output_path, "recomputed_chunks.txt")
-    flush_result_json(result_json_path, [])
-    init_recomputed_chunks_txt(recomputed_chunks_path)
+
+    Saved = load_existing_results(result_json_path)
+    resume_idx = len(Saved)
 
     # load_datasets
     print(f"loading {args.dataset}...")
@@ -295,17 +314,43 @@ if __name__ == "__main__":
     dataset = LongBench(args)
     dataloader = DataLoader(dataset, collate_fn=custom_collate_fn)
     max_new_tokens = data2maxlen[args.dataset]
+    dataset_len = len(dataset)
+    if resume_idx > dataset_len:
+        raise ValueError(
+            f"resume index out of range: resume_idx={resume_idx}, dataset_len={dataset_len}"
+        )
+
+    if resume_idx == 0:
+        flush_result_json(result_json_path, [])
+        init_recomputed_chunks_txt(recomputed_chunks_path)
+    else:
+        print(f"resume enabled: skip first {resume_idx} finished items")
+        if not os.path.exists(recomputed_chunks_path):
+            print(
+                "warning: recomputed_chunks.txt not found, create a new file and append from resumed index"
+            )
+            init_recomputed_chunks_txt(recomputed_chunks_path)
 
     # load_model
     print(f"loading {args.model}")
     model, tokenizer = load_model(args)
 
     # main
-    Saved, TTFT, TPOT, LEN = [], [], [], []
+    TTFT, TPOT, LEN = [], [], []
+    for item in Saved:
+        if "ttft" in item:
+            TTFT.append(float(item["ttft"]))
+        if "tpot" in item:
+            TPOT.append(float(item["tpot"]))
+        if "pred_len" in item:
+            LEN.append(int(item["pred_len"]))
+        elif "prediction" in item:
+            LEN.append(len(tokenizer.encode(item["prediction"])))
+
     stop_list = get_stop_tokens(args, tokenizer)
 
-    i = 0
-    for batch in tqdm(dataloader):
+    data_iter = enumerate(itertools.islice(dataloader, resume_idx, None), start=resume_idx)
+    for i, batch in tqdm(data_iter, total=dataset_len, initial=resume_idx):
         data = {}
         doc_ids, prompt_ids, answers, params, classes = (
             batch[0]["doc_ids"],
@@ -382,6 +427,8 @@ if __name__ == "__main__":
         data["prediction"] = continuation
         data["answers"] = answers
         data["all_classes"] = classes
+        data["ttft"] = float(ttft)
+        data["tpot"] = float(tpot)
 
         # 添加重算token信息，占据垂直篇幅过长
         # data["recomputed_tokens"] = build_recomputed_tokens(
@@ -391,7 +438,9 @@ if __name__ == "__main__":
         #     tokenizer=tokenizer,
         # )
 
-        LEN.append(len(tokenizer.encode(continuation)))
+        pred_len = len(tokenizer.encode(continuation))
+        LEN.append(pred_len)
+        data["pred_len"] = int(pred_len)
         Saved.append(data)
         recomputed_chunks = build_recomputed_chunks(
             args=args,
@@ -402,7 +451,6 @@ if __name__ == "__main__":
         )
         flush_result_json(result_json_path, Saved)
         append_recomputed_chunks_txt(recomputed_chunks_path, i, recomputed_chunks)
-        i += 1
         # import pdb; pdb.set_trace()
 
     predictions, answers = [], []
@@ -416,14 +464,17 @@ if __name__ == "__main__":
     # record
     now = datetime.now()
     formatted_datetime = now.strftime("%Y年%m月%d日 %H时%M分%S秒")
+    mean_ttft_ms = np.mean(TTFT) * 1000 if len(TTFT) > 0 else float("nan")
+    mean_tpot_ms = np.mean(TPOT) * 1000 if len(TPOT) > 0 else float("nan")
+    mean_len = np.mean(LEN) if len(LEN) > 0 else float("nan")
     with open(f"{args.output_path}/result.txt", "w") as f:
         f.write(formatted_datetime)
         f.write("\n")
         f.write(f"|------------- {args.dataset:^10s} {args.reuse:^7s} ------------|\n")
         f.write(
-            f"|TTFT: {np.mean(TTFT)*1000:8.1f}| TPOT: {np.mean(TPOT)*1000:8.1f}| {METRIC_NAME[args.dataset]}: {score:8.2f}|\n"
+            f"|TTFT: {mean_ttft_ms:8.1f}| TPOT: {mean_tpot_ms:8.1f}| {METRIC_NAME[args.dataset]}: {score:8.2f}|\n"
         )
-        f.write(f"Average len: {np.mean(LEN):.2f}\n")
+        f.write(f"Average len: {mean_len:.2f}\n")
 
     with open(f"{args.output_path}/result.txt", "r") as file:
         content = file.read()

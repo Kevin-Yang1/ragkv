@@ -389,7 +389,16 @@ def MistralSdpaAttention_Forward(
             value_old = reuse_config['cat_kv'][1].unsqueeze(0)
 
         if reuse_config['check'] == 'checking':
-            top_indices = get_topindices(reuse_config, other_config, query_states, key_states, value_states, value_old, self.num_key_value_groups)
+            top_indices = get_topindices(
+                reuse_config,
+                other_config,
+                query_states,
+                key_states,
+                value_states,
+                key_old,
+                value_old,
+                self.num_key_value_groups,
+            )
 
             query_states = query_states[:,:,top_indices,] # (top+last, 32, 128)
             reuse_config['imp_indices'] = top_indices

@@ -400,7 +400,16 @@ def Qwen2SdpaAttention_Forward(
             # import pdb; pdb.set_trace()
             import time
             a = time.time()
-            top_indices = get_topindices(reuse_config, other_config, query_states, key_states, value_states, value_old, self.num_key_value_groups)
+            top_indices = get_topindices(
+                reuse_config,
+                other_config,
+                query_states,
+                key_states,
+                value_states,
+                key_old,
+                value_old,
+                self.num_key_value_groups,
+            )
             # print(time.time() - a)
 
             query_states = query_states[:,:,top_indices,] # (top+last, 32, 128)
