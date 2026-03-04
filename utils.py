@@ -19,7 +19,9 @@ def seed_everything(seed):
     torch.cuda.manual_seed_all(seed)
 
 
-def save_kvs(args, model, doc_ids, item_id, params, prompt_ids=None, save_surprisal=False):
+def save_kvs(
+    args, model, doc_ids, item_id, params, prompt_ids=None, save_surprisal=False
+):
     """
     save kvs for a single test sample
     """
@@ -27,11 +29,10 @@ def save_kvs(args, model, doc_ids, item_id, params, prompt_ids=None, save_surpri
         raise ValueError("prompt_ids is required when save_surprisal=True")
 
     def get_chunk_kvs(doc_index, past_key_values, params):
+        # prefix保留了bos，chunk的去除bos, q保持不动（q没有bos，只是占位需要全部"重计算"）
         if doc_index == 0 or doc_index == len(doc_ids) - 1:
             # for prefix and query
-            temp_k = past_key_values[
-                0
-            ].clone()  # prefix保留了bos，chunk的去除bos, q保持不动（q没有bos，只是占位需要全部"重计算"）
+            temp_k = past_key_values[0].clone()
             temp_v = past_key_values[1].clone()
         else:  # for all chunks
             temp_k = past_key_values[0][:, :, params["doc_start_len"] :, :].clone()
@@ -61,7 +62,11 @@ def save_kvs(args, model, doc_ids, item_id, params, prompt_ids=None, save_surpri
 
     save_path = os.path.join(args.kv_path, f"item_{item_id}")
     os.makedirs(save_path, exist_ok=True)
-    saved_k, saved_v = [], []
+    layer_list = model.model.layers
+    num_layers = len(layer_list)
+    # 避免在循环内反复 cat 触发 O(n^2) 拷贝：先按层收集，再一次性拼接。
+    saved_k_chunks = [[] for _ in range(num_layers)]
+    saved_v_chunks = [[] for _ in range(num_layers)]
     seg_scores = [] if save_surprisal else None
     for i in range(len(doc_ids)):
         # just prefill
@@ -83,19 +88,12 @@ def save_kvs(args, model, doc_ids, item_id, params, prompt_ids=None, save_surpri
             seg_scores.append(get_chunk_surprisal(outputs.logits, input_ids).cpu())
 
         # cat in layer dim
-        layer_list = model.model.layers
-        for layer_idx in range(len(layer_list)):
-            past_key_values = layer_list[layer_idx].self_attn.hack_kv
+        for layer_idx, layer in enumerate(layer_list):
+            past_key_values = layer.self_attn.hack_kv
             temp_k, temp_v = get_chunk_kvs(i, past_key_values, params)
-
-            if i == 0:
-                saved_k.append(temp_k)
-                saved_v.append(temp_v)
-            else:
-                # import pdb; pdb.set_trace()
-                saved_k[layer_idx] = torch.cat((saved_k[layer_idx], temp_k), dim=1)
-                saved_v[layer_idx] = torch.cat((saved_v[layer_idx], temp_v), dim=1)
-            layer_list[layer_idx].self_attn.hack_kv = None
+            saved_k_chunks[layer_idx].append(temp_k)
+            saved_v_chunks[layer_idx].append(temp_v)
+            layer.self_attn.hack_kv = None
 
         del outputs, input_ids, attention_mask
 
@@ -106,7 +104,12 @@ def save_kvs(args, model, doc_ids, item_id, params, prompt_ids=None, save_surpri
         
         """
 
-    saved_k, saved_v = torch.stack(saved_k), torch.stack(saved_v)
+    saved_k = torch.stack(
+        [torch.cat(chunks, dim=1) for chunks in saved_k_chunks], dim=0
+    )
+    saved_v = torch.stack(
+        [torch.cat(chunks, dim=1) for chunks in saved_v_chunks], dim=0
+    )
     saved_kv = torch.stack([saved_k, saved_v])  # (2, 32, 8, n, 128)
     torch.save(saved_kv, f"{save_path}/kvs.pt")
 
@@ -155,7 +158,9 @@ def build_doc_chunk_ranges(doc_ids, params):
 
 
 def save_surprisal_chunkwise(*args, **kwargs):
-    raise RuntimeError("save_surprisal_chunkwise is deprecated; use save_kvs(..., save_surprisal=True)")
+    raise RuntimeError(
+        "save_surprisal_chunkwise is deprecated; use save_kvs(..., save_surprisal=True)"
+    )
 
 
 def load_kv(args, model, tokenizer, doc_ids, params, item_idx):
@@ -168,7 +173,8 @@ def load_kv(args, model, tokenizer, doc_ids, params, item_idx):
     ./kvs/${model}/${dataset}/item_0
     """
     old_kv_path = f"{args.kv_path}/item_{item_idx}/kvs.pt"
-    old_kv = torch.load(old_kv_path)
+    # 统一加载到 CPU，兼容历史上以 cuda/cpu 两种设备保存的 kvs.pt。
+    old_kv = torch.load(old_kv_path, map_location="cpu")
 
     return old_kv
 
@@ -196,7 +202,9 @@ def initialize_config(args):
         if args.reuse in {"blend", "blend_debug"}:
             reuse_config["blend_gap_source"] = getattr(args, "blend_gap_source", "v")
         if args.reuse == "blend_debug":
-            reuse_config["blend_debug_fusion"] = getattr(args, "blend_debug_fusion", "mul")
+            reuse_config["blend_debug_fusion"] = getattr(
+                args, "blend_debug_fusion", "mul"
+            )
             reuse_config["blend_debug_alpha"] = 0.5
     else:
         reuse_config = None

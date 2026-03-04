@@ -386,6 +386,16 @@ def Qwen2SdpaAttention_Forward(
     reuse_config = extra_config['reuse_config']
 
     if reuse_config:
+        # cat_kv 可能来自 CPU 或其它 GPU，按层对齐到当前计算设备与 dtype。
+        if reuse_config.get('cat_kv') is not None and torch.is_tensor(reuse_config['cat_kv']):
+            if (
+                reuse_config['cat_kv'].device != query_states.device
+                or reuse_config['cat_kv'].dtype != query_states.dtype
+            ):
+                reuse_config['cat_kv'] = reuse_config['cat_kv'].to(
+                    device=query_states.device,
+                    dtype=query_states.dtype,
+                )
         if reuse_config['check']:
             if reuse_config['fake_q'] is None: # 在计算rope时需要对齐q和old k
                 reuse_config['fake_q'] = torch.rand_like(query_states)

@@ -1,4 +1,5 @@
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import itertools
 import json
 import os
@@ -272,6 +273,14 @@ def append_recomputed_chunks_txt(path, item_id, chunks):
         f.write("\n")
 
 
+def load_reuse_payload(args, item_idx):
+    """在 CPU 上预加载当前样本复用所需文件。"""
+    payload = {"cat_kv": load_kv(args, None, None, None, None, item_idx)}
+    if args.reuse == "surprisal_chunk":
+        payload["surprisal_info"] = load_surprisal(args, item_idx)
+    return payload
+
+
 def parse_args():
     parse = argparse.ArgumentParser(description="")
     parse.add_argument("--model", type=str, default=None)
@@ -349,109 +358,133 @@ if __name__ == "__main__":
 
     stop_list = get_stop_tokens(args, tokenizer)
 
+    prefetch_executor = None
+    prefetch_future = None
+    if args.reuse != "no" and resume_idx < dataset_len:
+        # 预先读取下一条样本文件，尽量与当前样本 GPU 解码重叠。
+        prefetch_executor = ThreadPoolExecutor(max_workers=1)
+        prefetch_future = prefetch_executor.submit(
+            load_reuse_payload, args, resume_idx
+        )
+
     data_iter = enumerate(itertools.islice(dataloader, resume_idx, None), start=resume_idx)
-    for i, batch in tqdm(data_iter, total=dataset_len, initial=resume_idx):
-        data = {}
-        doc_ids, prompt_ids, answers, params, classes = (
-            batch[0]["doc_ids"],
-            batch[0]["prompt_ids"],
-            batch[0]["answer"],
-            batch[0]["params"],
-            batch[0]["all_classes"],
-        )
-        extra_config = None
-
-        input_ids = torch.tensor([prompt_ids]).to("cuda")
-
-        past_key_values = None
-        position_ids = torch.arange(input_ids.shape[-1]).unsqueeze(0).to("cuda")
-        input = {
-            "input_ids": input_ids,
-            "past_key_values": past_key_values,
-            "position_ids": position_ids,
-        }  # pos 这里只支持bs 1
-
-        # generate
-        if args.reuse == "no" and args.drop == "False":  # 全部重算+全kv
-            continuation, ttft, tpot = vanilla(
-                args, model, tokenizer, input, stop_list, max_new_tokens, {}
+    try:
+        for i, batch in tqdm(data_iter, total=dataset_len, initial=resume_idx):
+            data = {}
+            doc_ids, prompt_ids, answers, params, classes = (
+                batch[0]["doc_ids"],
+                batch[0]["prompt_ids"],
+                batch[0]["answer"],
+                batch[0]["params"],
+                batch[0]["all_classes"],
             )
+            extra_config = None
 
-        else:
-            extra_config = initialize_config(args)
-            extra_config["other_config"]["data_params"] = params
+            input_ids = torch.tensor([prompt_ids]).to("cuda")
 
-            if args.reuse != "no":
-                extra_config["reuse_config"]["cat_kv"] = load_kv(
-                    args, model, tokenizer, doc_ids, params, i
+            past_key_values = None
+            position_ids = torch.arange(input_ids.shape[-1]).unsqueeze(0).to("cuda")
+            input = {
+                "input_ids": input_ids,
+                "past_key_values": past_key_values,
+                "position_ids": position_ids,
+            }  # pos 这里只支持bs 1
+
+            # generate
+            if args.reuse == "no" and args.drop == "False":  # 全部重算+全kv
+                continuation, ttft, tpot = vanilla(
+                    args, model, tokenizer, input, stop_list, max_new_tokens, {}
                 )
-                if args.reuse == "surprisal_chunk":
-                    surprisal_info = load_surprisal(args, i)
-                    if (
-                        "scores" not in surprisal_info
-                        or "chunk_ranges" not in surprisal_info
-                    ):
-                        raise ValueError(f"invalid surprisal file format for item_{i}")
 
-                    seq_len = int(surprisal_info.get("seq_len", -1))
-                    if seq_len != len(prompt_ids):
-                        raise ValueError(
-                            f"surprisal seq_len mismatch for item_{i}: {seq_len} vs {len(prompt_ids)}"
+            else:
+                extra_config = initialize_config(args)
+                extra_config["other_config"]["data_params"] = params
+
+                if args.reuse != "no":
+                    if prefetch_future is not None:
+                        reuse_payload = prefetch_future.result()
+                    else:
+                        reuse_payload = load_reuse_payload(args, i)
+
+                    next_i = i + 1
+                    if prefetch_executor is not None and next_i < dataset_len:
+                        prefetch_future = prefetch_executor.submit(
+                            load_reuse_payload, args, next_i
                         )
+                    else:
+                        prefetch_future = None
 
-                    scores = surprisal_info["scores"]
-                    if scores.numel() != len(prompt_ids):
-                        raise ValueError(
-                            f"surprisal score length mismatch for item_{i}: {scores.numel()} vs {len(prompt_ids)}"
-                        )
-                    if not torch.isfinite(scores).all():
-                        raise ValueError(f"non-finite surprisal scores in item_{i}")
+                    extra_config["reuse_config"]["cat_kv"] = reuse_payload["cat_kv"]
+                    if args.reuse == "surprisal_chunk":
+                        surprisal_info = reuse_payload["surprisal_info"]
+                        if (
+                            "scores" not in surprisal_info
+                            or "chunk_ranges" not in surprisal_info
+                        ):
+                            raise ValueError(f"invalid surprisal file format for item_{i}")
 
-                    expected_ranges = build_doc_chunk_ranges(doc_ids, params)
-                    loaded_ranges = [tuple(r) for r in surprisal_info["chunk_ranges"]]
-                    if loaded_ranges != expected_ranges:
-                        raise ValueError(
-                            f"chunk_ranges mismatch for item_{i}: loaded={loaded_ranges}, expected={expected_ranges}"
-                        )
+                        seq_len = int(surprisal_info.get("seq_len", -1))
+                        if seq_len != len(prompt_ids):
+                            raise ValueError(
+                                f"surprisal seq_len mismatch for item_{i}: {seq_len} vs {len(prompt_ids)}"
+                            )
 
-                    extra_config["reuse_config"]["surprisal_scores"] = scores
-                    extra_config["reuse_config"]["chunk_ranges"] = expected_ranges
+                        scores = surprisal_info["scores"]
+                        if scores.numel() != len(prompt_ids):
+                            raise ValueError(
+                                f"surprisal score length mismatch for item_{i}: {scores.numel()} vs {len(prompt_ids)}"
+                            )
+                        if not torch.isfinite(scores).all():
+                            raise ValueError(f"non-finite surprisal scores in item_{i}")
 
-            continuation, ttft, tpot = decode(
-                args, model, tokenizer, input, stop_list, max_new_tokens, extra_config
+                        expected_ranges = build_doc_chunk_ranges(doc_ids, params)
+                        loaded_ranges = [tuple(r) for r in surprisal_info["chunk_ranges"]]
+                        if loaded_ranges != expected_ranges:
+                            raise ValueError(
+                                f"chunk_ranges mismatch for item_{i}: loaded={loaded_ranges}, expected={expected_ranges}"
+                            )
+
+                        extra_config["reuse_config"]["surprisal_scores"] = scores
+                        extra_config["reuse_config"]["chunk_ranges"] = expected_ranges
+
+                continuation, ttft, tpot = decode(
+                    args, model, tokenizer, input, stop_list, max_new_tokens, extra_config
+                )
+
+            TTFT.append(ttft)
+            TPOT.append(tpot)
+
+            data["prediction"] = continuation
+            data["answers"] = answers
+            data["all_classes"] = classes
+            data["ttft"] = float(ttft)
+            data["tpot"] = float(tpot)
+
+            # 添加重算token信息，占据垂直篇幅过长
+            # data["recomputed_tokens"] = build_recomputed_tokens(
+            #     args=args,
+            #     extra_config=extra_config,
+            #     prompt_ids=prompt_ids,
+            #     tokenizer=tokenizer,
+            # )
+
+            pred_len = len(tokenizer.encode(continuation))
+            LEN.append(pred_len)
+            data["pred_len"] = int(pred_len)
+            Saved.append(data)
+            recomputed_chunks = build_recomputed_chunks(
+                args=args,
+                extra_config=extra_config,
+                doc_ids=doc_ids,
+                params=params,
+                prompt_ids=prompt_ids,
             )
-
-        TTFT.append(ttft)
-        TPOT.append(tpot)
-
-        data["prediction"] = continuation
-        data["answers"] = answers
-        data["all_classes"] = classes
-        data["ttft"] = float(ttft)
-        data["tpot"] = float(tpot)
-
-        # 添加重算token信息，占据垂直篇幅过长
-        # data["recomputed_tokens"] = build_recomputed_tokens(
-        #     args=args,
-        #     extra_config=extra_config,
-        #     prompt_ids=prompt_ids,
-        #     tokenizer=tokenizer,
-        # )
-
-        pred_len = len(tokenizer.encode(continuation))
-        LEN.append(pred_len)
-        data["pred_len"] = int(pred_len)
-        Saved.append(data)
-        recomputed_chunks = build_recomputed_chunks(
-            args=args,
-            extra_config=extra_config,
-            doc_ids=doc_ids,
-            params=params,
-            prompt_ids=prompt_ids,
-        )
-        flush_result_json(result_json_path, Saved)
-        append_recomputed_chunks_txt(recomputed_chunks_path, i, recomputed_chunks)
-        # import pdb; pdb.set_trace()
+            flush_result_json(result_json_path, Saved)
+            append_recomputed_chunks_txt(recomputed_chunks_path, i, recomputed_chunks)
+            # import pdb; pdb.set_trace()
+    finally:
+        if prefetch_executor is not None:
+            prefetch_executor.shutdown(wait=False)
 
     predictions, answers = [], []
     for item in Saved:
