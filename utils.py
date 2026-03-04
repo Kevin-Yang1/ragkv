@@ -326,5 +326,5 @@ def decode(args, model, tokenizer, input, stop_list, max_new_tokens, config):
 
         tpot = (time.time() - start_time) / (i + 1)
         output_sequence = tokenizer.decode(new_token_list, skip_special_tokens=True)
-        print(output_sequence)
+        # print(output_sequence)
         return output_sequence, ttft, tpot

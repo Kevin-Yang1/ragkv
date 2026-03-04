@@ -303,49 +303,64 @@ def parse_args():
 
 
 if __name__ == "__main__":
+    # 固定随机种子，确保评测过程（如采样、随机初始化等）可复现。
     seed_everything(42)
     args = parse_args()
+    # 输出目录是必填项：所有中间结果和最终统计都会写到这里。
     if not args.output_path:
         raise ValueError("--output_path is required")
     os.makedirs(args.output_path, exist_ok=True)
+    # `result.json` 保存逐条样本的预测结果；`recomputed_chunks.txt` 记录重算 chunk 信息。
     result_json_path = os.path.join(args.output_path, "result.json")
     recomputed_chunks_path = os.path.join(args.output_path, "recomputed_chunks.txt")
 
+    # 读取历史结果，支持断点续跑：
+    # - `Saved` 中每个元素对应一个样本结果
+    # - `resume_idx` 表示下一条要处理的样本下标
     Saved = load_existing_results(result_json_path)
     resume_idx = len(Saved)
 
-    # load_datasets
+    # 加载数据集与 DataLoader。
     print(f"loading {args.dataset}...")
 
+    # LongBench 数据项本身已是结构化字典；这里不做堆叠，按原样返回 batch。
     def custom_collate_fn(batch):
         return batch
 
     dataset = LongBench(args)
     dataloader = DataLoader(dataset, collate_fn=custom_collate_fn)
+    # 不同子任务允许的最大生成长度不同，由 data2maxlen 统一配置。
     max_new_tokens = data2maxlen[args.dataset]
     dataset_len = len(dataset)
+    # 若历史结果条数超过数据集长度，说明结果文件与当前数据集不匹配，直接报错。
     if resume_idx > dataset_len:
         raise ValueError(
             f"resume index out of range: resume_idx={resume_idx}, dataset_len={dataset_len}"
         )
 
+    # 首次运行时初始化输出文件；断点续跑时保留已完成结果并继续追加。
     if resume_idx == 0:
         flush_result_json(result_json_path, [])
         init_recomputed_chunks_txt(recomputed_chunks_path)
     else:
         print(f"resume enabled: skip first {resume_idx} finished items")
+        # 兼容旧目录只有 result.json 没有 recomputed_chunks.txt 的情况。
         if not os.path.exists(recomputed_chunks_path):
             print(
                 "warning: recomputed_chunks.txt not found, create a new file and append from resumed index"
             )
             init_recomputed_chunks_txt(recomputed_chunks_path)
 
-    # load_model
+    # 加载模型与分词器。
     print(f"loading {args.model}")
     model, tokenizer = load_model(args)
 
-    # main
+    # 主循环统计项：
+    # - TTFT: time to first token
+    # - TPOT: time per output token
+    # - LEN: 生成长度（token 数）
     TTFT, TPOT, LEN = [], [], []
+    # 若是断点续跑，把已完成样本中的历史统计先恢复进来，避免最终均值被低估。
     for item in Saved:
         if "ttft" in item:
             TTFT.append(float(item["ttft"]))
@@ -358,19 +373,23 @@ if __name__ == "__main__":
 
     stop_list = get_stop_tokens(args, tokenizer)
 
+    # 为 KV 复用场景准备“下一条样本预读”线程：
+    # 目标是将磁盘读取与当前样本的 GPU 解码并行，减少等待。
     prefetch_executor = None
     prefetch_future = None
     if args.reuse != "no" and resume_idx < dataset_len:
-        # 预先读取下一条样本文件，尽量与当前样本 GPU 解码重叠。
+        # 先提交 resume_idx 对应样本的预读任务。
         prefetch_executor = ThreadPoolExecutor(max_workers=1)
         prefetch_future = prefetch_executor.submit(
             load_reuse_payload, args, resume_idx
         )
 
+    # `islice(..., resume_idx, None)` 跳过已完成样本，实现断点继续。
     data_iter = enumerate(itertools.islice(dataloader, resume_idx, None), start=resume_idx)
     try:
         for i, batch in tqdm(data_iter, total=dataset_len, initial=resume_idx):
             data = {}
+            # 当前实现默认 batch_size=1，因此取 batch[0]。
             doc_ids, prompt_ids, answers, params, classes = (
                 batch[0]["doc_ids"],
                 batch[0]["prompt_ids"],
@@ -378,8 +397,10 @@ if __name__ == "__main__":
                 batch[0]["params"],
                 batch[0]["all_classes"],
             )
+            # 仅在 decode 路径使用（含复用/丢弃等策略）；vanilla 路径可为 None。
             extra_config = None
 
+            # 构造模型输入（统一放到 CUDA）。
             input_ids = torch.tensor([prompt_ids]).to("cuda")
 
             past_key_values = None
@@ -392,20 +413,25 @@ if __name__ == "__main__":
 
             # generate
             if args.reuse == "no" and args.drop == "False":  # 全部重算+全kv
+                # 纯基线路径：不做 KV 复用，不做 KV 丢弃，完整重算。
                 continuation, ttft, tpot = vanilla(
                     args, model, tokenizer, input, stop_list, max_new_tokens, {}
                 )
 
             else:
+                # 复用/丢弃类策略统一走 decode，并通过 extra_config 传递控制参数。
                 extra_config = initialize_config(args)
+                # 注入当前样本的数据参数，供后续 chunk 切分和策略判断使用。
                 extra_config["other_config"]["data_params"] = params
 
                 if args.reuse != "no":
+                    # 优先消费后台预读结果；若无预读任务则同步读取当前样本复用文件。
                     if prefetch_future is not None:
                         reuse_payload = prefetch_future.result()
                     else:
                         reuse_payload = load_reuse_payload(args, i)
 
+                    # 立即预读下一条，尽量持续形成“读文件 + 解码”的流水线。
                     next_i = i + 1
                     if prefetch_executor is not None and next_i < dataset_len:
                         prefetch_future = prefetch_executor.submit(
@@ -414,15 +440,19 @@ if __name__ == "__main__":
                     else:
                         prefetch_future = None
 
+                    # 复用路径的核心输入：拼接后的历史 KV。
                     extra_config["reuse_config"]["cat_kv"] = reuse_payload["cat_kv"]
                     if args.reuse == "surprisal_chunk":
+                        # surprisal_chunk 需要额外的 token 粒度困难度分数与 chunk 边界。
                         surprisal_info = reuse_payload["surprisal_info"]
+                        # 基本字段校验，避免下游 KeyError 或 silent bug。
                         if (
                             "scores" not in surprisal_info
                             or "chunk_ranges" not in surprisal_info
                         ):
                             raise ValueError(f"invalid surprisal file format for item_{i}")
 
+                        # 校验 surprisal 文件记录的序列长度是否与当前 prompt 一致。
                         seq_len = int(surprisal_info.get("seq_len", -1))
                         if seq_len != len(prompt_ids):
                             raise ValueError(
@@ -430,13 +460,16 @@ if __name__ == "__main__":
                             )
 
                         scores = surprisal_info["scores"]
+                        # 分数长度必须与 token 长度一一对应。
                         if scores.numel() != len(prompt_ids):
                             raise ValueError(
                                 f"surprisal score length mismatch for item_{i}: {scores.numel()} vs {len(prompt_ids)}"
                             )
+                        # 防止出现 NaN/Inf 导致后续打分或排序异常。
                         if not torch.isfinite(scores).all():
                             raise ValueError(f"non-finite surprisal scores in item_{i}")
 
+                        # 以当前样本真实文档切分结果为准，核对加载的 chunk 边界是否一致。
                         expected_ranges = build_doc_chunk_ranges(doc_ids, params)
                         loaded_ranges = [tuple(r) for r in surprisal_info["chunk_ranges"]]
                         if loaded_ranges != expected_ranges:
@@ -444,6 +477,7 @@ if __name__ == "__main__":
                                 f"chunk_ranges mismatch for item_{i}: loaded={loaded_ranges}, expected={expected_ranges}"
                             )
 
+                        # 把校验后的 surprisal 信息写入配置，供 decode 阶段使用。
                         extra_config["reuse_config"]["surprisal_scores"] = scores
                         extra_config["reuse_config"]["chunk_ranges"] = expected_ranges
 
@@ -451,9 +485,11 @@ if __name__ == "__main__":
                     args, model, tokenizer, input, stop_list, max_new_tokens, extra_config
                 )
 
+            # 记录时延统计。
             TTFT.append(ttft)
             TPOT.append(tpot)
 
+            # 组装当前样本输出。
             data["prediction"] = continuation
             data["answers"] = answers
             data["all_classes"] = classes
@@ -468,10 +504,12 @@ if __name__ == "__main__":
             #     tokenizer=tokenizer,
             # )
 
+            # 生成长度按 tokenizer 编码后的 token 数统计。
             pred_len = len(tokenizer.encode(continuation))
             LEN.append(pred_len)
             data["pred_len"] = int(pred_len)
             Saved.append(data)
+            # recomputed_chunks 用于复盘“哪些 chunk 被重算”，单独写文本文件便于审计。
             recomputed_chunks = build_recomputed_chunks(
                 args=args,
                 extra_config=extra_config,
@@ -479,10 +517,12 @@ if __name__ == "__main__":
                 params=params,
                 prompt_ids=prompt_ids,
             )
+            # 每条样本完成后立刻落盘，降低长任务中断带来的结果丢失风险。
             flush_result_json(result_json_path, Saved)
             append_recomputed_chunks_txt(recomputed_chunks_path, i, recomputed_chunks)
             # import pdb; pdb.set_trace()
     finally:
+        # 无论成功或异常都回收后台线程，避免进程退出时悬挂。
         if prefetch_executor is not None:
             prefetch_executor.shutdown(wait=False)
 
@@ -490,11 +530,13 @@ if __name__ == "__main__":
     for item in Saved:
         predictions.append(item["prediction"])
         answers.append(item["answers"])
+        # LongBench 的 scorer_e 需要 all_classes（分类任务标签空间）。
         all_classes = item["all_classes"]
 
+    # 统一计算任务指标分数（如 F1/EM/Accuracy 等，具体由数据集决定）。
     score = scorer_e(args.dataset, predictions, answers, all_classes)
 
-    # record
+    # 汇总并写入最终可读报告。
     now = datetime.now()
     formatted_datetime = now.strftime("%Y年%m月%d日 %H时%M分%S秒")
     mean_ttft_ms = np.mean(TTFT) * 1000 if len(TTFT) > 0 else float("nan")
