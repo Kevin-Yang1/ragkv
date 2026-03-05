@@ -19,6 +19,8 @@ def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
 def get_layer(reuse_method):
     if reuse_method == 'blend_debug':
         return 1
+    if reuse_method == 'tail_ratio':
+        return 0
     if 'blend' in reuse_method:
         return 1 # compute imp indices at layer 1
     if 'debug' in reuse_method:
@@ -184,10 +186,18 @@ def get_topindices(
         # blend: 在文档区(去掉末尾 last_len)中，按 value 新旧差异的平方和选 top-k；
         # 然后无条件拼接末尾 last_len（保证最近 token 始终保留）。
         last_len = other_config['data_params']['last_len']
+        prefix_len = other_config['data_params']['prefix_len']
         total_len = value_states.shape[2]
-        last_indices = [total_len - last_len + l for l in range(last_len)]
+        doc_start = max(0, min(prefix_len, total_len))
+        doc_end = max(doc_start, total_len - last_len)
+        doc_len = doc_end - doc_start
+        question_indices = torch.arange(doc_end, total_len, device=value_states.device)
 
-        topk_num = int((total_len - last_len) * reuse_config['recomp_ratio'])
+        if doc_len <= 0:
+            return question_indices
+
+        topk_num = int(doc_len * reuse_config['recomp_ratio'])
+        topk_num = max(0, min(topk_num, doc_len))
         gap_source = reuse_config.get("blend_gap_source", "v")
         temp_diff = compute_blend_gap_score(
             gap_source,
@@ -195,12 +205,18 @@ def get_topindices(
             value_states,
             key_old,
             value_old,
-            0,
-            total_len - last_len,
+            doc_start,
+            doc_end,
         )
-        top_indices = torch.topk(temp_diff, k=topk_num).indices  # shape: [topk_num]
-        top_indices, _ = torch.sort(top_indices)
-        top_indices = torch.cat([top_indices, torch.tensor(last_indices, device=top_indices.device)])
+        if topk_num > 0:
+            doc_top_local = torch.topk(temp_diff, k=topk_num).indices
+            doc_top_local, _ = torch.sort(doc_top_local)
+            doc_indices = doc_top_local + doc_start
+        else:
+            doc_indices = torch.empty(0, dtype=torch.long, device=value_states.device)
+
+        top_indices = torch.cat([doc_indices, question_indices], dim=0)
+        top_indices = torch.unique(top_indices, sorted=True)
 
     elif 'attnlink' in reuse_config['reuse']:
         # attnlink: 直接使用预先给定的 sink 位置作为重要索引。
@@ -223,6 +239,33 @@ def get_topindices(
 
         top_indices = torch.tensor(last_indices, device=value_states.device)
 
+    elif reuse_config['reuse'] == 'tail_ratio':
+        # tail_ratio:
+        # - 在文档区 [prefix_len, total_len-last_len) 中按比例取尾部 token；
+        # - 始终附带 query 区 [total_len-last_len, total_len)；
+        # - 当 floor(doc_len * ratio)=0 时，退化为仅 query 区。
+        last_len = other_config['data_params']['last_len']
+        prefix_len = other_config['data_params']['prefix_len']
+        total_len = value_states.shape[2]
+        doc_start = max(0, min(prefix_len, total_len))
+        doc_end = max(doc_start, total_len - last_len)
+        doc_len = doc_end - doc_start
+
+        ratio = float(reuse_config['recomp_ratio'])
+        tail_k = int(math.floor(doc_len * ratio))
+        tail_k = max(0, min(tail_k, doc_len))
+
+        question_indices = torch.arange(doc_end, total_len, device=value_states.device)
+        if tail_k > 0:
+            doc_tail_indices = torch.arange(
+                doc_end - tail_k, doc_end, device=value_states.device
+            )
+            top_indices = torch.cat([doc_tail_indices, question_indices], dim=0)
+        else:
+            top_indices = question_indices
+
+        top_indices = torch.unique(top_indices, sorted=True)
+
     elif 'debug' in reuse_config['reuse']:
         # debug:
         # 1) 先估计末尾 query 对历史 key 的注意力总量；
@@ -231,21 +274,37 @@ def get_topindices(
         # 4) 再拼接末尾 last_len，保证近期 token 全部包含。
         kernel_size = 5
         last_len = other_config['data_params']['last_len']
+        prefix_len = other_config['data_params']['prefix_len']
         total_len = value_states.shape[2]
+        doc_start = max(0, min(prefix_len, total_len))
+        doc_end = max(doc_start, total_len - last_len)
+        doc_len = doc_end - doc_start
+        question_indices = torch.arange(doc_end, total_len, device=value_states.device)
 
+        if doc_len <= 0:
+            return question_indices
+
+        # 用“末尾 last_len 个 query”去评估历史 token 的被关注程度：
+        # 1) key 侧先去掉 prefix 区，避免前缀模板 token 干扰排序；
+        # 2) repeat_kv 将 KV 头扩展到与 query 头数对齐，便于统一做注意力打分；
+        # 3) 返回的 attn_weights_sum 是按 token 位置聚合后的重要性分数。
         attn_weights_sum = compute_attention_sum_wo_head(
             query_states,
-            repeat_kv(key_states[:, :, other_config['data_params']['prefix_len']:, :], kvgroups),
+            repeat_kv(key_states[:, :, doc_start:, :], kvgroups),
             last_len
         )
         attn_cache = F.avg_pool1d(attn_weights_sum, kernel_size=kernel_size, padding=kernel_size // 2, stride=1)
-        topk_num = int((total_len - last_len) * reuse_config['recomp_ratio'])
+        topk_num = int(doc_len * reuse_config['recomp_ratio'])
+        topk_num = max(0, min(topk_num, doc_len))
 
-        top_indices = attn_cache.topk(topk_num, dim=-1).indices.squeeze(0) + other_config['data_params']['prefix_len']
-        total_len = value_states.shape[2]
-        last_indices = torch.arange(total_len - last_len, total_len, device=top_indices.device)
+        if topk_num > 0:
+            doc_top_local = attn_cache.topk(topk_num, dim=-1).indices.squeeze(0)
+            doc_indices = doc_top_local + doc_start
+        else:
+            doc_indices = torch.empty(0, dtype=torch.long, device=value_states.device)
 
-        top_indices = torch.cat([top_indices, last_indices])
+        top_indices = torch.cat([doc_indices, question_indices], dim=0)
+        top_indices = torch.unique(top_indices, sorted=True)
 
     elif 'surprisal_chunk' in reuse_config['reuse']:
         # surprisal_chunk:
@@ -303,21 +362,50 @@ def get_topindices(
     return top_indices
 
 def compute_attention_sum_wo_head(query_states, key_states, last_len):
+    """
+    计算“末尾 query 段”对“历史 key 段（不含末尾 query 自身）”的注意力总量。
+
+    该函数用于为重算策略提供打分信号：
+    - 输入的 Q/K 原始形状通常为 [bs, num_heads, seq_len, head_dim]；
+    - 先把 head 维与特征维合并，得到“无 head 区分”的表示；
+    - 再只取最后 `last_len` 个 query 作为查询端，和全量 key 做点积；
+    - 对 query-query 子块施加因果 mask，避免未来信息泄露；
+    - softmax 后沿 query 维求和，得到每个历史 token 被末尾 query 关注的总强度。
+
+    返回：
+    - attn_weights_sum: shape [1, seq_len - last_len]
+      表示每个“历史 token”累计收到的注意力分数（越大通常越重要）。
+    """
+    # [bs, h, q_len, d] -> [1, q_len, h*d]
+    # 将多头展平成单一特征维，便于后续统一计算“无 head”注意力。
     query_states = query_states.permute(0, 2, 1, 3).reshape(1, query_states.shape[-2], -1)
+    # [bs, h_kv, k_len, d] -> [1, k_len, h_kv*d]
+    # key 侧同样做 head 合并，保持与 query 的最后一维可对齐。
     key_states = key_states.permute(0, 2, 1, 3).reshape(1, key_states.shape[-2], -1)
 
+    # 缩放点积注意力中的尺度项 sqrt(dim)。
     dim=key_states.shape[-1]
+    # 仅使用最后 last_len 个 query 与全量 key 计算相似度：
+    # 结果形状 [1, last_len, k_len]。
     attn_weights = torch.matmul(query_states[:,-last_len:,:], key_states.transpose(1,2)) / math.sqrt(dim)
+    # 为“末尾 query 与末尾 key 的子矩阵”构造下三角因果 mask：
+    # 非法位置填充为极小值，softmax 后近似 0。
     mask = torch.full((last_len, last_len), torch.finfo(attn_weights.dtype).min, device=attn_weights.device)
 
     mask_cond = torch.arange(mask.size(-1), device=attn_weights.device)
+    # 仅保留下三角（含对角线）可见，其余位置保持极小值。
     mask.masked_fill_(mask_cond < (mask_cond + 1).view(mask.size(-1), 1), 0)
     mask = mask.to(attn_weights.device)
     mask = mask[None, :, :]
+    # 把 mask 叠加到右下角 query-query 子块（对应最后 last_len tokens）。
     attn_weights[:, -last_len:, -last_len:] += mask
+    # softmax 归一化到概率分布；内部用 fp32 更稳定，再转回原 dtype。
     attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
+    # 仅统计“历史 key 区（去掉最后 last_len）”被关注程度：
+    # 在 query 维（-2）求和，得到每个历史位置的累计注意力。
     attn_weights_sum = attn_weights[:,:,:-last_len].sum(dim = -2)
 
+    # 返回 float，供上层 top-k 选择逻辑直接使用。
     return attn_weights_sum.float()
 
 def create_flashinfer_mask(query_state, key_state, indices, mode):

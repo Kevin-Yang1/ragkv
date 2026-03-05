@@ -3,8 +3,8 @@
 
 Example:
 python analysis/plot_recompute_tokens_methods.py \
-  --model Llama-3-8B-Instruct \
-  --dataset 2wikimqa \
+  --model Meta-Llama-3-8B-Instruct \
+  --dataset qasper \
   --item_id 1
 """
 
@@ -114,15 +114,33 @@ def build_token_bar(chunks: List[dict]) -> tuple[np.ndarray, List[int], int, int
     return img, chunk_starts, total_len, recompute_count
 
 
+def compute_recompute_stats_excluding_edges(chunks: List[dict]) -> tuple[int, int]:
+    """Return (recomputed_count, token_count) excluding first/last chunks."""
+    if len(chunks) <= 2:
+        return 0, 0
+
+    recompute_count = 0
+    token_count = 0
+    for c in chunks[1:-1]:
+        c_len = int(c["len"])
+        token_count += c_len
+        recompute_count += sum(1 for idx in c["indices"] if 0 <= idx < c_len)
+    return recompute_count, token_count
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Compare recomputed token positions across methods for one item."
     )
-    parser.add_argument("--model", "--model_name", dest="model", required=True, type=str)
+    parser.add_argument(
+        "--model", "--model_name", dest="model", required=True, type=str
+    )
     parser.add_argument("--dataset", required=True, type=str)
     parser.add_argument("--item_id", required=True, type=int)
     parser.add_argument("--outputs_root", default="outputs", type=str)
-    parser.add_argument("--methods", nargs="*", default=None, help="optional method dir names")
+    parser.add_argument(
+        "--methods", nargs="*", default=None, help="optional method dir names"
+    )
     parser.add_argument("--save_path", default=None, type=str)
     parser.add_argument("--dpi", default=220, type=int)
     parser.add_argument("--hide_chunk_boundaries", action="store_true")
@@ -146,7 +164,9 @@ def main() -> None:
             else:
                 print(f"[skip] method dir not found: {p}")
     else:
-        method_dirs = sorted([p for p in model_dir.iterdir() if p.is_dir()], key=lambda x: x.name)
+        method_dirs = sorted(
+            [p for p in model_dir.iterdir() if p.is_dir()], key=lambda x: x.name
+        )
 
     if not method_dirs:
         raise RuntimeError("no method directories to inspect")
@@ -155,7 +175,9 @@ def main() -> None:
     for method_dir in method_dirs:
         recompute_path = resolve_recomputed_file(method_dir, args.dataset)
         if recompute_path is None:
-            print(f"[skip] {method_dir.name}: no recomputed_chunks.txt for dataset '{args.dataset}'")
+            print(
+                f"[skip] {method_dir.name}: no recomputed_chunks.txt for dataset '{args.dataset}'"
+            )
             continue
 
         items = parse_recomputed_chunks(recompute_path)
@@ -174,23 +196,34 @@ def main() -> None:
         )
 
     if not traces:
-        raise RuntimeError("no valid method data found for the given model/dataset/item_id")
+        raise RuntimeError(
+            "no valid method data found for the given model/dataset/item_id"
+        )
 
-    reference_chunks = next((t["chunks"] for t in traces if t["chunks"] is not None), None)
+    reference_chunks = next(
+        (t["chunks"] for t in traces if t["chunks"] is not None), None
+    )
     if reference_chunks is None:
-        raise RuntimeError("all selected methods have null chunks; cannot infer token length")
+        raise RuntimeError(
+            "all selected methods have null chunks; cannot infer token length"
+        )
 
     for t in traces:
         if t["chunks"] is None:
-            t["chunks"] = [{"len": int(c["len"]), "indices": []} for c in reference_chunks]
+            t["chunks"] = [
+                {"len": int(c["len"]), "indices": []} for c in reference_chunks
+            ]
             t["imputed_from_null"] = True
 
     for t in traces:
         img, chunk_starts, total_len, recompute_count = build_token_bar(t["chunks"])
+        recompute_mid, total_mid = compute_recompute_stats_excluding_edges(t["chunks"])
         t["img"] = img
         t["chunk_starts"] = chunk_starts
         t["total_len"] = total_len
         t["recompute_count"] = recompute_count
+        t["recompute_mid"] = recompute_mid
+        t["total_mid"] = total_mid
 
     total_lens = {t["total_len"] for t in traces}
     share_x = len(total_lens) == 1
@@ -203,8 +236,9 @@ def main() -> None:
 
     for i, (ax, t) in enumerate(zip(axes, traces)):
         total_len = t["total_len"]
-        recompute_count = t["recompute_count"]
-        ratio = recompute_count / total_len if total_len > 0 else 0.0
+        recompute_mid = t["recompute_mid"]
+        total_mid = t["total_mid"]
+        ratio = recompute_mid / total_mid if total_mid > 0 else 0.0
 
         ax.imshow(
             t["img"],
@@ -217,17 +251,18 @@ def main() -> None:
             for cs in t["chunk_starts"][1:]:
                 ax.plot(
                     [cs, cs],
-                    [1.0, 1.07],
+                    [1.0, 1.14],
                     color="#666666",
-                    linewidth=0.6,
+                    linewidth=1.2,
                     clip_on=False,
                     transform=ax.get_xaxis_transform(),
                 )
 
         suffix = " | null -> empty" if t["imputed_from_null"] else ""
+        ax.set_title(f"{t['method']}", loc="left", fontsize=9)
         ax.set_title(
-            f"{t['method']}  recomputed={recompute_count}/{total_len} ({ratio:.2%}){suffix}",
-            loc="left",
+            f"recomputed={recompute_mid}/{total_mid} ({ratio:.2%}){suffix}",
+            loc="right",
             fontsize=9,
         )
         ax.set_ylim(0, 1)
@@ -257,7 +292,9 @@ def main() -> None:
         edgecolor="#cccccc",
         linewidth=0.6,
     )
-    fig.legend(handles=[patch_r, patch_n], loc="upper right", fontsize=8, framealpha=0.9)
+    fig.legend(
+        handles=[patch_r, patch_n], loc="upper right", fontsize=8, framealpha=0.9
+    )
     fig.tight_layout(rect=[0, 0, 1, 0.97])
 
     if args.save_path:

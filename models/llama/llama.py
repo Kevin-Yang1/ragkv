@@ -400,6 +400,9 @@ def LlamaSdpaAttention_Forward(
             value_old = reuse_config['cat_kv'][1].unsqueeze(0)
 
         if reuse_config['check'] == 'checking':
+            # checking 阶段：
+            # 基于当前层“新算出的 q/k/v”与“历史 old kv”计算重要 token 索引。
+            # 该索引用于后续层的重算裁剪（只在重要位置继续计算）。
             top_indices = get_topindices(
                 reuse_config,
                 other_config,
@@ -410,14 +413,23 @@ def LlamaSdpaAttention_Forward(
                 value_old,
                 self.num_key_value_groups,
             )
+            # 仅保留被挑中的 query 位置，压缩后续计算长度。
+            # 形状变化：query_states[..., total_len, ...] -> query_states[..., top_len, ...]
             query_states = query_states[:,:,top_indices,] # (top+last, 32, 128)
+            # 保存重要索引，供 postchecking 阶段回填 old kv 使用。
             reuse_config['imp_indices'] = top_indices
+            # 同步更新当前 query 长度，后续 attention 逻辑依赖该长度。
             q_len = query_states.shape[-2]
 
         if reuse_config['check'] == 'postchecking':
+            # postchecking 阶段：
+            # 当前层只对 imp_indices 对应位置重算得到新 key/value，
+            # 然后把这些位置“写回”到 old kv，未重算位置继续沿用 old kv。
             imp_indices = reuse_config['imp_indices']
+            # 按重要索引进行局部替换，实现“部分重算 + 全量上下文融合”。
             key_old[:,:,imp_indices,:] = key_states
             value_old[:,:,imp_indices,:] = value_states
+            # 用融合后的 kv 继续后续计算与缓存更新。
             key_states = key_old
             value_states = value_old
 

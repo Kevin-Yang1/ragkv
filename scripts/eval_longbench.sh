@@ -56,6 +56,7 @@ model='Llama-3-8B-Instruct'
 # 可以添加多个策略进行对比实验
 declare -a reuse_list=(
     'debug'      # A³ 核心算法（基于注意力分数选择）- 推荐
+    # 'tail_ratio' # 文档区按比例选择尾部 token，并始终保留 query 段
     # 'surprisal_chunk' # 基于离线 token 惊奇度（按 chunk 分配预算）
     # 'blend'    # 基于 Value 差异选择
     # 'blend_debug' # 融合 blend + debug（同时考虑KV差异和query关注）

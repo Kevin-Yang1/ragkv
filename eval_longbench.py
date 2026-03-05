@@ -252,7 +252,9 @@ def load_existing_results(result_json_path):
     with open(result_json_path, "r", encoding="utf-8") as f:
         data = json.load(f)
     if not isinstance(data, list):
-        raise ValueError(f"invalid result.json format (expect list): {result_json_path}")
+        raise ValueError(
+            f"invalid result.json format (expect list): {result_json_path}"
+        )
     return data
 
 
@@ -285,9 +287,7 @@ def parse_args():
     parse = argparse.ArgumentParser(description="")
     parse.add_argument("--model", type=str, default=None)
     parse.add_argument("--reuse", type=str, default="fp16")
-    parse.add_argument(
-        "--blend_gap_source", type=str, choices=["v", "k"], default="v"
-    )
+    parse.add_argument("--blend_gap_source", type=str, choices=["v", "k"], default="v")
     parse.add_argument(
         "--blend_debug_fusion", type=str, choices=["mul", "sum", "rank"], default="mul"
     )
@@ -380,12 +380,12 @@ if __name__ == "__main__":
     if args.reuse != "no" and resume_idx < dataset_len:
         # 先提交 resume_idx 对应样本的预读任务。
         prefetch_executor = ThreadPoolExecutor(max_workers=1)
-        prefetch_future = prefetch_executor.submit(
-            load_reuse_payload, args, resume_idx
-        )
+        prefetch_future = prefetch_executor.submit(load_reuse_payload, args, resume_idx)
 
     # `islice(..., resume_idx, None)` 跳过已完成样本，实现断点继续。
-    data_iter = enumerate(itertools.islice(dataloader, resume_idx, None), start=resume_idx)
+    data_iter = enumerate(
+        itertools.islice(dataloader, resume_idx, None), start=resume_idx
+    )
     try:
         for i, batch in tqdm(data_iter, total=dataset_len, initial=resume_idx):
             data = {}
@@ -450,7 +450,9 @@ if __name__ == "__main__":
                             "scores" not in surprisal_info
                             or "chunk_ranges" not in surprisal_info
                         ):
-                            raise ValueError(f"invalid surprisal file format for item_{i}")
+                            raise ValueError(
+                                f"invalid surprisal file format for item_{i}"
+                            )
 
                         # 校验 surprisal 文件记录的序列长度是否与当前 prompt 一致。
                         seq_len = int(surprisal_info.get("seq_len", -1))
@@ -471,7 +473,9 @@ if __name__ == "__main__":
 
                         # 以当前样本真实文档切分结果为准，核对加载的 chunk 边界是否一致。
                         expected_ranges = build_doc_chunk_ranges(doc_ids, params)
-                        loaded_ranges = [tuple(r) for r in surprisal_info["chunk_ranges"]]
+                        loaded_ranges = [
+                            tuple(r) for r in surprisal_info["chunk_ranges"]
+                        ]
                         if loaded_ranges != expected_ranges:
                             raise ValueError(
                                 f"chunk_ranges mismatch for item_{i}: loaded={loaded_ranges}, expected={expected_ranges}"
@@ -482,7 +486,13 @@ if __name__ == "__main__":
                         extra_config["reuse_config"]["chunk_ranges"] = expected_ranges
 
                 continuation, ttft, tpot = decode(
-                    args, model, tokenizer, input, stop_list, max_new_tokens, extra_config
+                    args,
+                    model,
+                    tokenizer,
+                    input,
+                    stop_list,
+                    max_new_tokens,
+                    extra_config,
                 )
 
             # 记录时延统计。

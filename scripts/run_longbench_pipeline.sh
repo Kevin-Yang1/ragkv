@@ -12,8 +12,8 @@ LONG_BENCH_DATASETS=(
   "multifieldqa_en"
   "hotpotqa"
   "2wikimqa"
-  "gov_report"
-  "multi_news"
+  # "gov_report"
+  # "multi_news"
   "trec"
   "triviaqa"
   "samsum"
@@ -46,17 +46,25 @@ Usage:
 Examples:
   bash scripts/run_longbench_pipeline.sh \
     --model Llama-3-8B-Instruct \
-    --dataset qasper,trec,triviaqa,samsum \
+    --dataset all \
     --reuse blend_debug \
     --blend_gap_source k \
     --rate 0.15 \
-    --cuda_visible_devices 0
+    --cuda_visible_devices 1
 
   bash scripts/run_longbench_pipeline.sh \
     --model /data/ykw/models/Meta-Llama-3-8B-Instruct \
     --dataset all \
     --reuse surprisal_chunk \
     --rate 0.15 \
+    --dry_run
+
+  bash scripts/run_longbench_pipeline.sh \
+    --model Llama-3-8B-Instruct \
+    --dataset all \
+    --reuse tail_ratio \
+    --rate 0.15 \
+    --cuda_visible_devices 1 \
     --dry_run
 EOF
 }
