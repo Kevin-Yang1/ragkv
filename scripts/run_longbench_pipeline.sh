@@ -36,6 +36,7 @@ Usage:
     --rate <float> \
     [--blend_gap_source <v|k>] \
     [--blend_debug_fusion <mul|sum|rank>] \
+    [--resume <true|false>] \
     [--drop <False|Streaming|SnapKV...>] \
     [--drop_config <path|None>] \
     [--max_length <int>] \
@@ -158,6 +159,7 @@ BLEND_GAP_SOURCE="v"
 BLEND_DEBUG_FUSION="mul"
 DROP="False"
 DROP_CONFIG="None"
+RESUME="true"
 MAX_LENGTH="7000"
 CHUNK_SIZE="512"
 CUDA_VISIBLE_DEVICES_ARG=""
@@ -191,6 +193,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --blend_debug_fusion)
       BLEND_DEBUG_FUSION="${2:-}"
+      shift 2
+      ;;
+    --resume)
+      RESUME="${2:-}"
       shift 2
       ;;
     --drop)
@@ -234,6 +240,7 @@ done
 
 [[ "${BLEND_GAP_SOURCE}" =~ ^(v|k)$ ]] || die "--blend_gap_source must be one of: v,k"
 [[ "${BLEND_DEBUG_FUSION}" =~ ^(mul|sum|rank)$ ]] || die "--blend_debug_fusion must be one of: mul,sum,rank"
+[[ "${RESUME}" =~ ^(true|false|True|False|1|0)$ ]] || die "--resume must be one of: true,false,True,False,1,0"
 [[ "${MAX_LENGTH}" =~ ^[0-9]+$ ]] || die "--max_length must be a positive integer"
 [[ "${CHUNK_SIZE}" =~ ^[0-9]+$ ]] || die "--chunk_size must be a positive integer"
 [[ "${MAX_LENGTH}" -gt 0 ]] || die "--max_length must be > 0"
@@ -295,6 +302,7 @@ log "model_arg=${MODEL_ARG} model_path=${MODEL_PATH} model_basename=${MODEL_BASE
 log "datasets=${DATASETS[*]}"
 log "reuse=${REUSE} rate=${RATE} drop=${DROP} drop_config=${DROP_CONFIG}"
 log "blend_gap_source=${BLEND_GAP_SOURCE} blend_debug_fusion=${BLEND_DEBUG_FUSION}"
+log "resume=${RESUME}"
 log "max_length=${MAX_LENGTH} chunk_size=${CHUNK_SIZE} dry_run=${DRY_RUN}"
 
 for dataset in "${DATASETS[@]}"; do
@@ -339,6 +347,7 @@ for dataset in "${DATASETS[@]}"; do
     --reuse "${REUSE}"
     --blend_gap_source "${BLEND_GAP_SOURCE}"
     --blend_debug_fusion "${BLEND_DEBUG_FUSION}"
+    --resume "${RESUME}"
     --output_path "${OUTPUT_DIR}"
     --dataset "${dataset}"
     --kv_path "${KV_DIR}"

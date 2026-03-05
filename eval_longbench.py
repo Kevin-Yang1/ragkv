@@ -283,6 +283,17 @@ def load_reuse_payload(args, item_idx):
     return payload
 
 
+def parse_bool_arg(v):
+    if isinstance(v, bool):
+        return v
+    value = str(v).strip().lower()
+    if value in {"1", "true", "t", "yes", "y", "on"}:
+        return True
+    if value in {"0", "false", "f", "no", "n", "off"}:
+        return False
+    raise argparse.ArgumentTypeError(f"invalid boolean value: {v}")
+
+
 def parse_args():
     parse = argparse.ArgumentParser(description="")
     parse.add_argument("--model", type=str, default=None)
@@ -297,6 +308,12 @@ def parse_args():
     parse.add_argument("--drop", type=str, default=False)
     parse.add_argument("--drop_config", type=str, default=None)
     parse.add_argument("--rate", type=float, default=0.15)
+    parse.add_argument(
+        "--resume",
+        type=parse_bool_arg,
+        default=True,
+        help="Whether to resume from existing result.json (default: True).",
+    )
 
     args = parse.parse_args()
     return args
@@ -317,8 +334,13 @@ if __name__ == "__main__":
     # 读取历史结果，支持断点续跑：
     # - `Saved` 中每个元素对应一个样本结果
     # - `resume_idx` 表示下一条要处理的样本下标
-    Saved = load_existing_results(result_json_path)
-    resume_idx = len(Saved)
+    if args.resume:
+        Saved = load_existing_results(result_json_path)
+        resume_idx = len(Saved)
+    else:
+        Saved = []
+        resume_idx = 0
+        print("resume disabled: start from scratch and overwrite outputs")
 
     # 加载数据集与 DataLoader。
     print(f"loading {args.dataset}...")

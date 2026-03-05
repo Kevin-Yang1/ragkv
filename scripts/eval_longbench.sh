@@ -69,6 +69,8 @@ declare -a reuse_list=(
 blend_debug_fusion=mul
 # blend / blend_debug 的差异来源：v|k
 blend_gap_source=v
+# 是否启用评测断点续跑：true|false
+resume=true
 
 # -----------------------------------------------------------------------------
 # KV Cache 驱逐策略配置（Drop Strategy）
@@ -145,6 +147,7 @@ for reuse in "${reuse_list[@]}"; do
             --reuse ${reuse} \
             --blend_gap_source ${blend_gap_source} \
             --blend_debug_fusion ${blend_debug_fusion} \
+            --resume ${resume} \
             --output_path ${output_dir} \
             --dataset ${dataset} \
             --kv_path ./kvs/${model}/${dataset} \
