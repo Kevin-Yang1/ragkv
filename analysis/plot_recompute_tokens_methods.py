@@ -4,7 +4,7 @@
 Example:
 python analysis/plot_recompute_tokens_methods.py \
   --model Meta-Llama-3-8B-Instruct \
-  --dataset qasper \
+  --dataset 2wikimqa \
   --item_id 1
 """
 

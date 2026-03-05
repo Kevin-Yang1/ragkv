@@ -381,13 +381,15 @@ if __name__ == "__main__":
     # - TTFT: time to first token
     # - TPOT: time per output token
     # - LEN: 生成长度（token 数）
-    TTFT, TPOT, LEN = [], [], []
+    TTFT, TPOT, LOAD, LEN = [], [], [], []
     # 若是断点续跑，把已完成样本中的历史统计先恢复进来，避免最终均值被低估。
     for item in Saved:
         if "ttft" in item:
             TTFT.append(float(item["ttft"]))
         if "tpot" in item:
             TPOT.append(float(item["tpot"]))
+        if "load_time" in item:
+            LOAD.append(float(item["load_time"]))
         if "pred_len" in item:
             LEN.append(int(item["pred_len"]))
         elif "prediction" in item:
@@ -436,6 +438,7 @@ if __name__ == "__main__":
             # generate
             if args.reuse == "no" and args.drop == "False":  # 全部重算+全kv
                 # 纯基线路径：不做 KV 复用，不做 KV 丢弃，完整重算。
+                load_time = 0.0
                 continuation, ttft, tpot = vanilla(
                     args, model, tokenizer, input, stop_list, max_new_tokens, {}
                 )
@@ -446,12 +449,16 @@ if __name__ == "__main__":
                 # 注入当前样本的数据参数，供后续 chunk 切分和策略判断使用。
                 extra_config["other_config"]["data_params"] = params
 
+                load_time = 0.0   # 仅 reuse 路径会加载 cat_kv，drop-only 路径置 0
+
                 if args.reuse != "no":
                     # 优先消费后台预读结果；若无预读任务则同步读取当前样本复用文件。
+                    t_load_start = time.time()
                     if prefetch_future is not None:
                         reuse_payload = prefetch_future.result()
                     else:
                         reuse_payload = load_reuse_payload(args, i)
+                    load_time = time.time() - t_load_start
 
                     # 立即预读下一条，尽量持续形成“读文件 + 解码”的流水线。
                     next_i = i + 1
@@ -520,6 +527,7 @@ if __name__ == "__main__":
             # 记录时延统计。
             TTFT.append(ttft)
             TPOT.append(tpot)
+            LOAD.append(load_time)
 
             # 组装当前样本输出。
             data["prediction"] = continuation
@@ -527,6 +535,7 @@ if __name__ == "__main__":
             data["all_classes"] = classes
             data["ttft"] = float(ttft)
             data["tpot"] = float(tpot)
+            data["load_time"] = float(load_time)
 
             # 添加重算token信息，占据垂直篇幅过长
             # data["recomputed_tokens"] = build_recomputed_tokens(
@@ -573,13 +582,14 @@ if __name__ == "__main__":
     formatted_datetime = now.strftime("%Y年%m月%d日 %H时%M分%S秒")
     mean_ttft_ms = np.mean(TTFT) * 1000 if len(TTFT) > 0 else float("nan")
     mean_tpot_ms = np.mean(TPOT) * 1000 if len(TPOT) > 0 else float("nan")
+    mean_load_ms = np.mean(LOAD) * 1000 if len(LOAD) > 0 else float("nan")
     mean_len = np.mean(LEN) if len(LEN) > 0 else float("nan")
     with open(f"{args.output_path}/result.txt", "w") as f:
         f.write(formatted_datetime)
         f.write("\n")
         f.write(f"|------------- {args.dataset:^10s} {args.reuse:^7s} ------------|\n")
         f.write(
-            f"|TTFT: {mean_ttft_ms:8.1f}| TPOT: {mean_tpot_ms:8.1f}| {METRIC_NAME[args.dataset]}: {score:8.2f}|\n"
+            f"|Load: {mean_load_ms:8.1f}| TTFT: {mean_ttft_ms:8.1f}| TPOT: {mean_tpot_ms:8.1f}| {METRIC_NAME[args.dataset]}: {score:8.2f}|\n"
         )
         f.write(f"Average len: {mean_len:.2f}\n")
 
