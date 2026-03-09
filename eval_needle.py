@@ -3,7 +3,6 @@ This script is adapted from
 https://github.com/FranxYao/Long-Context-Data-Engineering
 """
 
-import tiktoken
 import os
 import pdb
 import glob
@@ -23,6 +22,7 @@ from torch.utils.data import DataLoader, Dataset
 
 
 from data.PaulGrahamEssays.loader import Needle
+from model_utils import uses_llama3_chat_template
 from models.loader import load_model
 from utils import *
 scorer = rouge_scorer.RougeScorer(['rouge1', 'rougeL'], use_stemmer=True)
@@ -261,12 +261,13 @@ class LLMNeedleHaystackTester:
 def get_stop_tokens(args, tokenizer):
     lst = [tokenizer.bos_token_id]
 
-    lst.append(128009)
-    lst.append(128006)
+    if uses_llama3_chat_template(args.model):
+        lst.append(128009)
+        lst.append(128006)
 
     lst.append(tokenizer.encode('\n', add_special_tokens=False)[-1])
     
-    return lst
+    return [token_id for token_id in lst if token_id is not None]
 
 if __name__ == "__main__":
     # Tons of defaults set, check out the LLMNeedleHaystackTester's init for more info

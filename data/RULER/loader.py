@@ -5,6 +5,8 @@ import json
 import torch
 from transformers import AutoTokenizer
 
+from model_utils import get_model_basename, uses_llama3_chat_template
+
 CONFIG = {
     'mistral': {'s_start': [1, 733, 16289, 28793], 's_end': [733, 28748, 16289, 28793]},
     'llama-3': {'s_start': [128000, 128006, 882, 128007, 271], 's_end': [128009, 128006, 78191, 128007, 271]},
@@ -13,19 +15,23 @@ CONFIG = {
 
 class Ruler(Dataset):
     def __init__(self, args):
-        self.dataset_path = f'./inputs/{os.path.basename(args.model)}/{args.dataset}.json'
+        model_name = get_model_basename(args.model)
+        model_name_lower = model_name.lower()
+        self.dataset_path = f'./inputs/{model_name}/{args.dataset}.json'
         self.ori_data = json.load(open(self.dataset_path, 'r'))
         self.prefix_prompt = json.load(open('config/ruler/prefix_prompt.json', 'r'))
 
-        if 'mistral' in args.model.lower():
+        if 'mistral' in model_name_lower:
             self.config = CONFIG['mistral']
-        elif 'llama-3' in args.model.lower():
+        elif uses_llama3_chat_template(args.model):
             self.config = CONFIG['llama-3']
-        elif 'qwen' in args.model.lower():
+        elif 'qwen' in model_name_lower:
             self.config = CONFIG['qwen']
+        else:
+            raise ValueError(f'unsupported chat template model: {model_name}')
 
         self.tokenizer = AutoTokenizer.from_pretrained(args.model)
-        if 'qwen' in args.model.lower():
+        if 'qwen' in model_name_lower:
             self._construct_for_qwen(args)
         else:
             self._construct(args)

@@ -1,3 +1,24 @@
+"""预计算 KV Cache 的入口脚本。
+
+作用：
+1. 根据 `--dataset` 选择 LongBench、Needle 或 RULER 数据加载器。
+2. 加载对应模型的 precompute 版本 forward，实现按 chunk 预计算 KV。
+3. 将每条样本的预计算结果保存到 `--kv_path/item_<id>/kvs.pt`。
+4. 对 LongBench 支持断点续跑；传入 `--save_surprisal` 时还会额外保存 `surprisal.pt`。
+
+可用示例：
+    python ./precompute.py \
+      --model /data/ykw/models/Meta-Llama-3.1-8B-Instruct \
+      --kv_path ./kvs/Llama-3.1-8B-Instruct/2wikimqa \
+      --dataset 2wikimqa
+
+    python ./precompute.py \
+      --model /data/ykw/models/Meta-Llama-3.1-8B-Instruct \
+      --kv_path ./kvs/Llama-3.1-8B-Instruct/2wikimqa \
+      --dataset 2wikimqa \
+      --save_surprisal
+"""
+
 import os
 from torch.utils.data import Dataset, DataLoader, Subset
 import time

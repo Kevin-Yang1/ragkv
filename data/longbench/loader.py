@@ -10,6 +10,8 @@ import json
 import torch
 from transformers import AutoTokenizer
 
+from model_utils import get_model_basename, uses_llama3_chat_template
+
 # =============================================================================
 # 不同模型的特殊 Token 配置
 # =============================================================================
@@ -104,9 +106,9 @@ class LongBench(Dataset):
         # 1. 加载数据文件
         # -------------------------------------------------------------------------
         # 路径格式: ./inputs/Meta-Llama-3-8B-Instruct/2wikimqa.json
-        self.dataset_path = (
-            f"./inputs/{os.path.basename(args.model)}/{args.dataset}.json"
-        )
+        model_name = get_model_basename(args.model)
+        model_name_lower = model_name.lower()
+        self.dataset_path = f"./inputs/{model_name}/{args.dataset}.json"
 
         # ori_data 结构：
         # [
@@ -135,12 +137,14 @@ class LongBench(Dataset):
         # 3. 检测模型类型并加载对应配置
         # -------------------------------------------------------------------------
         # 根据模型路径判断模型类型
-        if "mistral" in args.model.lower():
+        if "mistral" in model_name_lower:
             self.config = CONFIG["mistral"]
-        elif "llama-3" in args.model.lower():
+        elif uses_llama3_chat_template(args.model):
             self.config = CONFIG["llama-3"]
-        elif "qwen" in args.model.lower():
+        elif "qwen" in model_name_lower:
             self.config = CONFIG["qwen"]
+        else:
+            raise ValueError(f"unsupported chat template model: {model_name}")
 
         # -------------------------------------------------------------------------
         # 4. 加载 tokenizer
@@ -151,7 +155,7 @@ class LongBench(Dataset):
         # 5. 构建数据集
         # -------------------------------------------------------------------------
         # Qwen 模型有特殊处理（没有 BOS token）
-        if "qwen" in args.model.lower():
+        if "qwen" in model_name_lower:
             self._construct_for_qwen(args)
         else:
             self._construct(args)

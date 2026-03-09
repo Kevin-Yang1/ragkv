@@ -21,6 +21,7 @@ from metrics import (
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 from transformers import AutoTokenizer, LlamaConfig, MistralConfig
+from model_utils import get_model_basename, uses_llama3_chat_template
 from models.loader import load_model
 
 from data.longbench.loader import LongBench
@@ -108,8 +109,10 @@ def scorer_e(dataset, predictions, answers, all_classes):
 
 
 def get_stop_tokens(args, tokenizer):
+    model_name = get_model_basename(args.model).lower()
     lst = [tokenizer.bos_token_id]
-    if "llama-3" in args.model.lower():
+
+    if uses_llama3_chat_template(args.model):
         lst.append(128009)
         lst.append(128006)
 
@@ -118,7 +121,7 @@ def get_stop_tokens(args, tokenizer):
         if args.dataset == "triviaqa":
             lst.append(tokenizer.encode("Passage", add_special_tokens=False)[-1])
 
-    if "mistral" in args.model.lower():
+    if "mistral" in model_name:
         if args.dataset in ["qasper", "multifieldqa_en", "hotpotqa", "2wikimqa"]:
             lst.append(tokenizer.encode("\n", add_special_tokens=False)[-1])
         if args.dataset == "samsum":
@@ -126,7 +129,7 @@ def get_stop_tokens(args, tokenizer):
         if args.dataset == "triviaqa":
             lst.append(tokenizer.encode("Passage", add_special_tokens=False)[-1])
 
-    if "qwen" in args.model.lower():
+    if "qwen" in model_name:
         if args.dataset in ["qasper", "multifieldqa_en", "hotpotqa", "2wikimqa"]:
             lst.append(tokenizer.encode("\n", add_special_tokens=False)[-1])
         if args.dataset == "samsum":
@@ -134,7 +137,7 @@ def get_stop_tokens(args, tokenizer):
         if args.dataset == "triviaqa":
             lst.append(tokenizer.encode("Passage", add_special_tokens=False)[-1])
 
-    return lst
+    return [token_id for token_id in lst if token_id is not None]
 
 
 def build_recomputed_tokens(args, extra_config, prompt_ids, tokenizer):

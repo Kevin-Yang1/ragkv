@@ -24,6 +24,7 @@ LONG_BENCH_DATASETS=(
 declare -A MODEL_ALIAS_MAP
 MODEL_ALIAS_MAP['Mistral-7B-Instruct']='../Models/LLMs/Mistral-7B-Instruct-v0.2'
 MODEL_ALIAS_MAP['Llama-3-8B-Instruct']='/data/ykw/models/Meta-Llama-3-8B-Instruct'
+MODEL_ALIAS_MAP['Llama-3.1-8B-Instruct']='/data/ykw/models/Meta-Llama-3.1-8B-Instruct'
 MODEL_ALIAS_MAP['Qwen2.5-7B-Instruct']='../Models/LLMs/Qwen2.5-7B-Instruct'
 
 usage() {
@@ -46,8 +47,8 @@ Usage:
 
 Examples:
   bash scripts/run_longbench_pipeline.sh \
-    --model Llama-3-8B-Instruct \
-    --dataset all \
+    --model Llama-3.1-8B-Instruct \
+    --dataset 2wikimqa \
     --reuse blend_debug \
     --blend_gap_source k \
     --rate 0.15 \
@@ -126,7 +127,7 @@ needs_rechunk_dataset() {
   # 3) chunk 样本数与原始 *_e.jsonl 行数不一致
   local dataset="$1"
   local raw_file="./data/longbench/${dataset}_e.jsonl"
-  local chunk_file="${INPUT_ROOT}/${MODEL_BASENAME}/${dataset}.json"
+  local chunk_file="${INPUT_ROOT}/${INPUT_MODEL_NAME}/${dataset}.json"
 
   if [[ ! -f "${raw_file}" ]]; then
     die "missing raw file: ${raw_file}"
@@ -250,6 +251,14 @@ done
 # 兼容模型别名与模型绝对路径两种输入。
 MODEL_PATH="${MODEL_ALIAS_MAP[${MODEL_ARG}]:-${MODEL_ARG}}"
 MODEL_BASENAME="$(basename "${MODEL_PATH}")"
+INPUT_MODEL_NAME="${MODEL_BASENAME}"
+ARTIFACT_MODEL_NAME="${MODEL_BASENAME}"
+for alias in "${!MODEL_ALIAS_MAP[@]}"; do
+  if [[ "${MODEL_ALIAS_MAP[${alias}]}" == "${MODEL_PATH}" ]]; then
+    ARTIFACT_MODEL_NAME="${alias}"
+    break
+  fi
+done
 
 # 可选运行环境变量覆盖。
 if [[ -n "${CUDA_VISIBLE_DEVICES_ARG}" ]]; then
@@ -298,7 +307,7 @@ if [[ "${DROP}" != "False" ]]; then
 fi
 
 log "pipeline start"
-log "model_arg=${MODEL_ARG} model_path=${MODEL_PATH} model_basename=${MODEL_BASENAME}"
+log "model_arg=${MODEL_ARG} model_path=${MODEL_PATH} input_model_name=${INPUT_MODEL_NAME} artifact_model_name=${ARTIFACT_MODEL_NAME}"
 log "datasets=${DATASETS[*]}"
 log "reuse=${REUSE} rate=${RATE} drop=${DROP} drop_config=${DROP_CONFIG}"
 log "blend_gap_source=${BLEND_GAP_SOURCE} blend_debug_fusion=${BLEND_DEBUG_FUSION}"
@@ -322,7 +331,7 @@ for dataset in "${DATASETS[@]}"; do
   fi
 
   # 步骤 2：预计算 KV；surprisal_chunk 模式自动补充 surprisal 文件。
-  KV_DIR="${KV_ROOT}/${MODEL_BASENAME}/${dataset}"
+  KV_DIR="${KV_ROOT}/${ARTIFACT_MODEL_NAME}/${dataset}"
   run_cmd mkdir -p "${KV_DIR}"
 
   PRECOMPUTE_CMD=(
@@ -338,7 +347,7 @@ for dataset in "${DATASETS[@]}"; do
   run_cmd "${PRECOMPUTE_CMD[@]}"
 
   # 步骤 3：执行评测，输出目录按 reuse+rate（及 drop）隔离。
-  OUTPUT_DIR="${OUTPUT_ROOT}/${MODEL_BASENAME}/${OUTPUT_TAG}/${dataset}"
+  OUTPUT_DIR="${OUTPUT_ROOT}/${ARTIFACT_MODEL_NAME}/${OUTPUT_TAG}/${dataset}"
   run_cmd mkdir -p "${OUTPUT_DIR}"
 
   EVAL_CMD=(

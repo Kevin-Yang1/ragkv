@@ -3,7 +3,6 @@ This script is adapted from
 https://github.com/FranxYao/Long-Context-Data-Engineering
 """
 
-import tiktoken
 import os
 import pdb
 import glob
@@ -19,6 +18,8 @@ import os
 from datetime import datetime, timezone
 import time
 import torch
+
+from model_utils import get_model_basename
 
 scorer = rouge_scorer.RougeScorer(['rouge1', 'rougeL'], use_stemmer=True)
 
@@ -149,6 +150,7 @@ class LLMNeedleHaystackTester:
     def run_test(self, args):
         output_data = []
         args.output_path
+        os.makedirs(args.output_path, exist_ok=True)
 
         # Run through each iteration of context_lengths and depths
         for context_length in tqdm(self.context_lengths):
@@ -307,9 +309,12 @@ if __name__ == "__main__":
     parser.add_argument('--model_name_suffix', type=str, default=None, help='name of model')
     parser.add_argument('--model_provider', type=str, default="LLaMA3", help='which model to use')
     parser.add_argument('--api_key', type=str, default="", help='OpenAI API Key')
-    parser.add_argument('--output_path', type=str, default="./inputs/Mistral-7B-Instruct-v0.2", help='')
+    parser.add_argument('--output_path', type=str, default=None, help='')
     parser.add_argument('--step', type=int, default=512)
     args = parser.parse_args()
+
+    if args.output_path is None:
+        args.output_path = os.path.join("./inputs", get_model_basename(args.model_name))
 
     ht = LLMNeedleHaystackTester(model_name=args.model_name,
                                  model_name_suffix=None,

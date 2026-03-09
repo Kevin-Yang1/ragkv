@@ -8,6 +8,7 @@ import torch
 from tqdm import tqdm
 from transformers import AutoTokenizer
 from typing import List
+from model_utils import uses_llama3_chat_template
 from models.loader import load_model
 from torch.utils.data import DataLoader, Dataset
 import time
@@ -19,10 +20,11 @@ from utils import *
 def get_stop_tokens(args, tokenizer):
     lst = [tokenizer.eos_token_id]
 
-    lst.append(128009)
-    lst.append(128006)
+    if uses_llama3_chat_template(args.model):
+        lst.append(128009)
+        lst.append(128006)
     
-    return lst
+    return [token_id for token_id in lst if token_id is not None]
 
 def main(args, model, tokenizer, dataloader):
 

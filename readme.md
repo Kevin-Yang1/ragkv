@@ -33,6 +33,15 @@ python ./chunk_longbench.py
 python ./chunk_needle.py
 python ./chunk_ruler.py
 
+# Meta-Llama-3.1-8B-Instruct uses its own artifact directories.
+# Generate inputs first so downstream stages can read:
+# inputs/Meta-Llama-3.1-8B-Instruct/*
+# kvs/Llama-3.1-8B-Instruct/*
+# outputs/Llama-3.1-8B-Instruct/*
+python ./chunk_longbench.py --model /data/ykw/models/Meta-Llama-3.1-8B-Instruct --dataset 2wikimqa
+python ./chunk_needle.py --model_name /data/ykw/models/Meta-Llama-3.1-8B-Instruct --model_provider LLaMA3
+python ./chunk_ruler.py --model_path /data/ykw/models/Meta-Llama-3.1-8B-Instruct --dataset niah_single_1
+
 # step 2 - precompute
 bash ./scripts/precompute.sh
 # default precompute only saves kvs.pt
@@ -64,6 +73,17 @@ python ./eval_longbench.py \
   --output_path ./outputs/Llama-3-8B-Instruct/blend_debug/2wikimqa \
   --dataset 2wikimqa \
   --kv_path ./kvs/Llama-3-8B-Instruct/2wikimqa \
+  --drop False \
+  --drop_config None \
+  --rate 0.15
+
+# optional: run Meta-Llama-3.1-8B-Instruct on LongBench
+python ./eval_longbench.py \
+  --model /data/ykw/models/Meta-Llama-3.1-8B-Instruct \
+  --reuse debug \
+  --output_path ./outputs/Llama-3.1-8B-Instruct/debug/2wikimqa \
+  --dataset 2wikimqa \
+  --kv_path ./kvs/Llama-3.1-8B-Instruct/2wikimqa \
   --drop False \
   --drop_config None \
   --rate 0.15

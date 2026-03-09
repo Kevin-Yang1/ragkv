@@ -1,9 +1,13 @@
 from transformers import AutoTokenizer, LlamaConfig, MistralConfig, Qwen2Config
-import  transformers
+import transformers
 import torch
 
+from model_utils import get_model_basename, is_llama_family
+
 def load_model(args):
-    if 'llama' in args.model.lower():
+    model_name = get_model_basename(args.model).lower()
+
+    if is_llama_family(args.model):
         config = LlamaConfig.from_pretrained(args.model)
         tokenizer = AutoTokenizer.from_pretrained(args.model, trust_remote_code=True)
 
@@ -23,7 +27,7 @@ def load_model(args):
             trust_remote_code=True,
         )
 
-    elif 'mistral' in args.model.lower():
+    elif 'mistral' in model_name:
         config = MistralConfig.from_pretrained(args.model)
         tokenizer = AutoTokenizer.from_pretrained(args.model, trust_remote_code=True)
 
@@ -44,7 +48,7 @@ def load_model(args):
             trust_remote_code=True,
         )       
 
-    elif 'qwen' in args.model.lower():
+    elif 'qwen' in model_name:
         config = Qwen2Config.from_pretrained(args.model)
         tokenizer = AutoTokenizer.from_pretrained(args.model, trust_remote_code=True)
 
@@ -71,7 +75,9 @@ def load_model(args):
     return model, tokenizer
 
 def load_model_precompute(args):
-    if 'llama' in args.model.lower():
+    model_name = get_model_basename(args.model).lower()
+
+    if is_llama_family(args.model):
         config = LlamaConfig.from_pretrained(args.model)
         tokenizer = AutoTokenizer.from_pretrained(args.model, trust_remote_code=True)
 
@@ -88,7 +94,7 @@ def load_model_precompute(args):
             trust_remote_code=True,
         )
 
-    elif 'mistral' in args.model.lower():
+    elif 'mistral' in model_name:
         config = MistralConfig.from_pretrained(args.model)
         tokenizer = AutoTokenizer.from_pretrained(args.model, trust_remote_code=True)
 
@@ -106,7 +112,7 @@ def load_model_precompute(args):
             trust_remote_code=True,
         )       
 
-    elif 'qwen' in args.model.lower():
+    elif 'qwen' in model_name:
         config = Qwen2Config.from_pretrained(args.model)
         tokenizer = AutoTokenizer.from_pretrained(args.model, trust_remote_code=True)
 
